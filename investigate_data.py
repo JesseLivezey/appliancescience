@@ -33,7 +33,7 @@ def parse_tagging_info(tagging_info_buffer):
 # tagged_training_filename = sys.argv[2]
 
 # This is the directory we're working with presently
-house_dir = "/Volumes/Extra_HDD/CDIPS_workshop_data/Belkin_Energy_data/H1/"
+house_dir = "data/H1/"
 
 # This is the training file we're investigating
 tagged_training_filename = "Tagged_Training_04_13_1334300401.mat"
@@ -265,7 +265,7 @@ for appliance_id in [8]:
         setp(ax19.get_xticklabels(), visible=False)
         ax19.legend(loc="upper left")
         ax20.plot(diff_spectrum, color="green")
-        ax20.plot(smooth_diff_spectrum, color="purple")
+#         ax20.plot(smooth_diff_spectrum, color="purple")
         ax20.legend(loc="upper right")
         ax20.set_xlim(0,4096)
         ax20.set_ylabel("Difference")
