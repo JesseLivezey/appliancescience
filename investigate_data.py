@@ -7,7 +7,7 @@ import sys
 from matplotlib.pylab import *
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
-from scipy import ndimage
+from scipy import ndimage, signal
 
 # This function parses the weirdly-formatted tagged info into a more friendly
 # dictionary. "tagged info" are time ranges for when an identified appliance is
@@ -26,6 +26,44 @@ def parse_tagging_info(tagging_info_buffer):
         else:
             tagging_info_dict[id]["OnOffSeq"].append( (on_time, off_time) )
     return tagging_info_dict
+
+
+
+
+def event_detector(time_ticks, vals, background_level=60):
+
+    detection_stream = np.gradient(vals)
+    peak_locs = signal.find_peaks_cwt(abs(detection_stream), np.array([1]), min_snr=1)
+    vetted_peak_locs = list(where(abs(detection_stream[peak_locs]) > 10)[0])
+    peak_indices = list(array(peak_locs)[vetted_peak_locs])
+    peak_times = time_ticks[peak_indices]
+    peak_data = detection_stream[peak_indices]
+    
+    event_index_flag_array = np.array([False]*vals.size, dtype=bool)
+
+    for indx in peak_indices:
+        continue_expanding = True
+        past_expansion_size = 0
+        future_expansion_size = 0
+        while continue_expanding:
+            continue_expanding = False
+            if vals[indx - past_expansion_size] > background_level:
+                event_index_flag_array[indx - past_expansion_size] = True
+                past_expansion_size+=1
+                continue_expanding = True
+            if vals[indx + future_expansion_size] > background_level:
+                event_index_flag_array[indx + future_expansion_size] = True
+                future_expansion_size+=1
+                continue_expanding = True
+            
+    event_edges = where(np.gradient(event_index_flag_array) != 0)[0][::2]
+    event_intervals = []
+    for n in range(len(event_edges)-1):
+        if event_index_flag_array[int((event_edges[n] + event_edges[n+1])/2)]:
+            event_intervals.append([time_ticks[event_edges[n]], 
+                time_ticks[event_edges[n+1]]])
+    event_intervals = array(event_intervals)
+    return event_intervals, event_index_flag_array
 
 
 
@@ -101,12 +139,13 @@ L2_Pf = np.cos(np.angle(L2_P))
 # This is the cropped HF time series
 # HF_TimeTicks_window = HF_TimeTicks[HF_start_index:HF_end_index]
 
-# for appliance_id in taggingInfo_dict.keys():
-for appliance_id in [8]:
+for appliance_id in taggingInfo_dict.keys():
+# for appliance_id in [38]:
     appliance_name = taggingInfo_dict[appliance_id]['ApplianceName']
     for interval in taggingInfo_dict[appliance_id]['OnOffSeq']:
-        start_time = interval[0] - 15
-        end_time = interval[1] + 15
+    
+        start_time = interval[0] - 75
+        end_time = interval[1] + 75
         
         a = HF_TimeTicks>=start_time
         b = HF_TimeTicks<=end_time
@@ -147,11 +186,43 @@ for appliance_id in [8]:
         HF_TimeTicks_window_shifted = HF_TimeTicks_window - HF_TimeTicks_window[0]
         L1_TimeTicks_window_shifted = L1_TimeTicks_window - HF_TimeTicks_window[0]
         L2_TimeTicks_window_shifted = L2_TimeTicks_window - HF_TimeTicks_window[0]
+        tagged_event_middle_time = (interval[0] + interval[1])/2.0 - HF_TimeTicks_window[0]
 
-
-
-
-
+        background_levels_array = [60, 75, 100, 150, 200, 300, 400]
+        for bl in background_levels_array:
+            try:
+                L1_Real_event_intervals, L1_Real_event_index_flag_array = event_detector(L1_TimeTicks_window_shifted, L1_Real_window, background_level=bl)
+                if L1_Real_event_intervals.size != 0:
+                    break
+            except:
+                continue
+        
+        for bl in background_levels_array:
+            try:
+                L2_Real_event_intervals, L2_Real_event_index_flag_array = event_detector(L2_TimeTicks_window_shifted, L2_Real_window, background_level=bl)
+                if L2_Real_event_intervals.size != 0:
+                    break
+            except:
+                continue
+        
+        if L1_Real_event_intervals.size == 0 and L2_Real_event_intervals.size == 0:
+            event_intervals = array([[interval[0] - HF_TimeTicks_window[0],  interval[1] - HF_TimeTicks_window[0]]])
+        else:        
+            event_intervals = []
+            for event_interval in L1_Real_event_intervals:
+                event_intervals.append(event_interval)
+            for event_interval in L2_Real_event_intervals:
+                event_intervals.append(event_interval)
+            event_intervals = np.array(event_intervals)
+        
+        detected_events_with_labeled_time_offset = []
+        for event_interval in event_intervals:
+            detected_events_with_labeled_time_offset.append([abs(event_interval.sum()/2 - tagged_event_middle_time), event_interval])
+        detected_events_with_labeled_time_offset.sort()
+        detected_event_interval = detected_events_with_labeled_time_offset[0][1]
+        
+        
+        
 
         L1_L2_plot_data = ((L1_TimeTicks_window_shifted, L1_Real_window),
                            (L1_TimeTicks_window_shifted, L1_Imag_window),
@@ -177,14 +248,14 @@ for appliance_id in [8]:
             "L2_Pf0", "L2_Pf1", "L2_Pf2", "L2_Pf3", "L2_Pf4", "L2_Pf5")
 
 
-
-
-        off_window_start_time = HF_TimeTicks[HF_start_index] - HF_TimeTicks_window[0]
-        off_window_end_time = HF_TimeTicks[HF_start_index+int(round(num_HF_timestamps/4.))] - HF_TimeTicks_window[0]
-
-
-        on_window_start_time = HF_TimeTicks[HF_end_index-int(round(num_HF_timestamps/4.))] - HF_TimeTicks_window[0]
-        on_window_end_time = HF_TimeTicks[HF_end_index] - HF_TimeTicks_window[0]
+        
+        before_event_time = detected_event_interval[0] - 5.0 # 5 second leeway
+        after_event_time = detected_event_interval[1] + 5.0 # 5 second leeway
+        middle_event_time = detected_event_interval.sum()/2
+        
+        before_event_HF_Time_index = where(abs(HF_TimeTicks_window_shifted - before_event_time) == min(abs(HF_TimeTicks_window_shifted - before_event_time)))[0]
+        middle_event_HF_Time_index = where(abs(HF_TimeTicks_window_shifted - middle_event_time) == min(abs(HF_TimeTicks_window_shifted - middle_event_time)))[0]
+        after_event_HF_Time_index = where(abs(HF_TimeTicks_window_shifted - after_event_time) == min(abs(HF_TimeTicks_window_shifted - after_event_time)))[0]
 
         # Create the big plot
 
@@ -225,8 +296,11 @@ for appliance_id in [8]:
         ax0.imshow(HF[:,HF_start_index:HF_end_index], origin="lower", interpolation="nearest",
             extent=[HF_TimeTicks_window_shifted[0], HF_TimeTicks_window_shifted[-1], 0, 4096], 
             aspect=3.0*num_HF_timestamps/4096.0)
-        ax0.plot([off_window_end_time, off_window_end_time], [0, 4096], color="blue")
-        ax0.plot([on_window_start_time, on_window_start_time], [0, 4096], color="red")
+            
+        ax0.plot([before_event_time, before_event_time], [0, 4096], color="red")
+        ax0.plot([middle_event_time, middle_event_time], [0, 4096], color="green")
+        ax0.plot([after_event_time, after_event_time], [0, 4096], color="blue")
+        
         ax0.set_xlim(HF_TimeTicks_window_shifted[0], HF_TimeTicks_window_shifted[-1])
         ax0.set_ylim(0, 4096)
         ax0.set_xlabel("Time From Start [s]")
@@ -234,38 +308,44 @@ for appliance_id in [8]:
         ax0.set_title("Spectrogram of High Frequency Noise")
 
 
-        color = ['red','orange','gold','green','blue', 'indigo']*3
         for n in range(len(axes)):
-            axes[n].plot(L1_L2_plot_data[n][0], L1_L2_plot_data[n][1], c=color[n], label=L1_L2_plot_labels[n])
+            axes[n].plot(L1_L2_plot_data[n][0], L1_L2_plot_data[n][1], c="k", label=L1_L2_plot_labels[n])
+            axes[n].plot([before_event_time, before_event_time], [L1_L2_plot_data[n][1].min()*0.9, L1_L2_plot_data[n][1].max()*1.1], color="red")
+            axes[n].plot([middle_event_time, middle_event_time], [L1_L2_plot_data[n][1].min()*0.9, L1_L2_plot_data[n][1].max()*1.1], color="green")
+            axes[n].plot([after_event_time, after_event_time], [L1_L2_plot_data[n][1].min()*0.9, L1_L2_plot_data[n][1].max()*1.1], color="blue")
             # axes[n].legend(loc="upper left")
             axes[n].set_ylabel(L1_L2_plot_labels[n])
             axes[n].set_xlim(HF_TimeTicks_window_shifted[0], HF_TimeTicks_window_shifted[-1])
+            axes[n].set_ylim(L1_L2_plot_data[n][1].min()*0.9, L1_L2_plot_data[n][1].max()*1.1)
             if n in [5, 11, 17]:
                 axes[n].set_xlabel("Time From Start [s]")
             else:
                 setp(axes[n].get_xticklabels(), visible=False)
 
-        off_average_spectrum = HF[:,HF_start_index:HF_start_index+int(round(num_HF_timestamps/4.))].sum(axis=1) / float(HF[:,HF_start_index:HF_start_index+int(round(num_HF_timestamps/4.))].shape[1])
+        before_average_spectrum = HF[:,before_event_HF_Time_index-6:before_event_HF_Time_index].sum(axis=1) / float(HF[:,before_event_HF_Time_index-6:before_event_HF_Time_index].shape[1])
 
-        on_average_spectrum = HF[:,HF_end_index-int(round(num_HF_timestamps/4.)):HF_end_index].sum(axis=1) / float(HF[:,HF_end_index-int(round(num_HF_timestamps/4.)):HF_end_index].shape[1])
+        event_average_spectrum = HF[:,middle_event_HF_Time_index-3:middle_event_HF_Time_index+3].sum(axis=1) / float(HF[:,middle_event_HF_Time_index-3:middle_event_HF_Time_index+3].shape[1])
 
-        diff_spectrum = on_average_spectrum - off_average_spectrum
+        after_average_spectrum = HF[:,after_event_HF_Time_index-6:after_event_HF_Time_index].sum(axis=1) / float(HF[:,after_event_HF_Time_index-6:after_event_HF_Time_index].shape[1])
+
+        diff_before_spectrum = event_average_spectrum - before_average_spectrum
+        diff_after_spectrum = event_average_spectrum - after_average_spectrum
         
 #         smooth_off_average_spectrum = ndimage.filters.gaussian_filter1d(off_average_spectrum, 5)
 #         smooth_on_average_spectrum = ndimage.filters.gaussian_filter1d(on_average_spectrum, 5)
 #         smooth_diff_spectrum = smooth_on_average_spectrum - smooth_off_average_spectrum
         
-        ax19.plot(off_average_spectrum, color="blue", label="Off")
-#         ax19.plot(smooth_off_average_spectrum, color="purple")
-        ax19.plot(on_average_spectrum, color="red", label="On")
-#         ax19.plot(smooth_on_average_spectrum, color="orange")
+        ax19.plot(before_average_spectrum, color="red", label="Before")
+        ax19.plot(event_average_spectrum, color="green", label="During")
+        ax19.plot(after_average_spectrum, color="blue", label="After")
         
         ax19.set_xlim(0,4096)
         ax19.set_ylim(0,255)
         setp(ax19.get_xticklabels(), visible=False)
         ax19.legend(loc="upper left")
-        ax20.plot(diff_spectrum, color="green")
-#         ax20.plot(smooth_diff_spectrum, color="purple")
+        ax20.plot(diff_before_spectrum, color="brown", label="D-B")
+        ax20.plot(diff_after_spectrum, color="darkcyan", label="D-A")
+
         ax20.legend(loc="upper right")
         ax20.set_xlim(0,4096)
         ax20.set_ylabel("Difference")
@@ -274,5 +354,5 @@ for appliance_id in [8]:
         fig.subplots_adjust(hspace=0.175, wspace=0.25)
 
         canvas = FigureCanvas(fig)
-        canvas.print_figure(house_dir[-3:-1] + "_" + str(int(round((start_time + end_time)/2.0))) + "_" + appliance_name.replace(" ", "") + ".pdf", dpi=300, bbox_inches='tight')
+        canvas.print_figure("plots/" + house_dir[-3:-1] + "_" + str(int(round((start_time + end_time)/2.0))) + "_" + appliance_name.replace(" ", "") + ".png", dpi=300, bbox_inches='tight')
         close("all")
