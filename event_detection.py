@@ -45,13 +45,26 @@ def measure_jump(vals, loc, search_width=1.0):
 
 def event_detector2(time_ticks, vals):
     # smooth with a width of 1 second
-    smooth_vals = ndimage.filters.gaussian_filter1d(vals, 1.0/time_ticks[1]-time_ticks[0])
+    smooth_vals = ndimage.filters.gaussian_filter1d(vals, 0.5/time_ticks[1]-time_ticks[0])
     # take the gradient to find where the changes occur
     smooth_detection_stream = np.gradient(smooth_vals)
 
     peak_locs = signal.find_peaks_cwt(abs(smooth_detection_stream), np.array([1]), min_snr=1)
-    half_amp = (smooth_detection_stream.max() - smooth_detection_stream.min())/2.0
-    vetted_peak_locs = list(where(abs(smooth_detection_stream[peak_locs]) > half_amp/5.0)[0])
+
+    
+    peak_mask_array = np.array([True]*vals.size, dtype=bool)
+    peak_mask_array[peak_locs] = False
+    for n in range(4):
+        true_locs = where(peak_mask_array==False)[0]
+        for pos in true_locs:
+            if not ( (pos == 0) or (pos == len(peak_mask_array)-1)):                
+                peak_mask_array[pos-1] = False
+                peak_mask_array[pos+1] = False
+    baseline_mean = smooth_detection_stream[peak_mask_array].mean()
+    baseline_std = smooth_detection_stream[peak_mask_array].std()
+    
+    vetted_peak_locs = list(where(abs(smooth_detection_stream[peak_locs]) > abs(baseline_mean) + 2*baseline_std)[0])
+    
     peak_indices = list(array(peak_locs)[vetted_peak_locs])
     peak_times = time_ticks[peak_indices]
     peak_data = smooth_detection_stream[peak_indices]
@@ -59,16 +72,20 @@ def event_detector2(time_ticks, vals):
     jumps = []
     for loc in peak_indices:
         jump_height, jump_std = measure_jump(vals, loc, search_width=1.0)
-        if abs(jump_height) > 3*jump_std:
+        if (abs(jump_height) > 3*jump_std) and (abs(jump_height) > 5.0):
             jumps.append([loc, (jump_height, jump_std)])
-    if len(jumps) > 1:
-        while (jumps[0][1][0] < 0):
-            jumps.pop(0)
-        while (jumps[-1][1][0] > 0):
-            jumps.pop(-1)
-
-        detected_interval = (time_ticks[jumps[0][0]], time_ticks[jumps[-1][0]])
-        return detected_interval
+    try:
+        if len(jumps) > 1:
+            while (jumps[0][1][0] < 0):
+                jumps.pop(0)
+            while (jumps[-1][1][0] > 0):
+                jumps.pop(-1)
+            detected_interval = (time_ticks[jumps[0][0]], time_ticks[jumps[-1][0]])
+            return detected_interval
+    except:
+        print "Cleaning jumps resulted in an error, so there is probably no"
+        print "well-detected event interval. Retruning empty tuple."
+        return ()
     else:
         return ()
 
@@ -87,7 +104,7 @@ def event_detector2(time_ticks, vals):
 house_dir = "data/H2/"
 
 # This is the training file we're investigating
-tagged_training_filename = "Tagged_Training_06_13_1339570801.mat"
+tagged_training_filename = "Tagged_Training_02_15_1360915201.mat"
 
 
 # Read in the matlab datafile
@@ -153,13 +170,13 @@ L2_Pf = np.cos(np.angle(L2_P))
 # HF_TimeTicks_window = HF_TimeTicks[HF_start_index:HF_end_index]
 
 # for appliance_id in taggingInfo_dict.keys():
-for appliance_id in [35]:
-    appliance_name = taggingInfo_dict[appliance_id]['ApplianceName']
-    for interval in taggingInfo_dict[appliance_id]['OnOffSeq']:
-    # for interval in [taggingInfo_dict[appliance_id]['OnOffSeq'][3]]:
+for appliance_id in [18]:
+    appliance_name = taggingInfo_dict[appliance_id]['ApplianceName'].replace("/", "")
+    # for interval in taggingInfo_dict[appliance_id]['OnOffSeq']:
+    for interval in [taggingInfo_dict[appliance_id]['OnOffSeq'][0]]:
 
-        start_time = interval[0] - 75
-        end_time = interval[1] + 75
+        start_time = interval[0] - 55
+        end_time = interval[1] + 55
 
         a = HF_TimeTicks>=start_time
         b = HF_TimeTicks<=end_time
@@ -207,56 +224,27 @@ for appliance_id in [35]:
         vals = L2_Real_window
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        #         background_levels_array = [60, 75, 100, 150, 200, 300, 400]
-        #         for bl in background_levels_array:
-        #             try:
-        #                 L1_Real_event_intervals, L1_Real_event_index_flag_array = event_detector(L1_TimeTicks_window_shifted, L1_Real_window, background_level=bl)
-        #                 if L1_Real_event_intervals.size != 0:
-        #                     break
-        #             except:
-        #                 continue
-        #         
-        #         for bl in background_levels_array:
-        #             try:
-        #                 L2_Real_event_intervals, L2_Real_event_index_flag_array = event_detector(L2_TimeTicks_window_shifted, L2_Real_window, background_level=bl)
-        #                 if L2_Real_event_intervals.size != 0:
-        #                     break
-        #             except:
-        #                 continue
         L1_Real_event_intervals = event_detector2(L1_TimeTicks_window_shifted, L1_Real_window)
         L2_Real_event_intervals = event_detector2(L2_TimeTicks_window_shifted, L2_Real_window)
 
         if len(L1_Real_event_intervals) == 0 and len(L2_Real_event_intervals) == 0:
             event_intervals = array([[interval[0] - HF_TimeTicks_window[0],  interval[1] - HF_TimeTicks_window[0]]])
         else:        
-            event_intervals = []
-            for event_interval in L1_Real_event_intervals:
-                event_intervals.append(event_interval)
-            for event_interval in L2_Real_event_intervals:
-                event_intervals.append(event_interval)
-            event_intervals = np.array(event_intervals)
+            event_intervals = np.vstack((L1_Real_event_intervals, L2_Real_event_intervals))
+#             event_intervals = []
+#             for event_interval in L1_Real_event_intervals:
+#                 event_intervals.append(event_interval)
+#             for event_interval in L2_Real_event_intervals:
+#                 event_intervals.append(event_interval)
+#             event_intervals = np.array(event_intervals)
 
         if len(event_intervals.shape)>1 and len(event_intervals)>1:
             detected_events_with_temporal_metric = []
             for event_interval in event_intervals:
                 time_offset = abs(event_interval.sum()/2 - tagged_event_middle_time)
                 time_width = event_interval[1]-event_interval[0]
-                metric = abs(event_interval.sum()/2 - tagged_event_middle_time) / time_width
+                metric = time_offset / time_width
+                print event_interval, time_offset, time_width
                 # Metric is abs time distance from middle of tagged time, divided by the width
                 # We want to pick the event which is closest to the center, but also the widest
                 detected_events_with_temporal_metric.append([metric, event_interval])
