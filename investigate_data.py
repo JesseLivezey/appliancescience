@@ -28,10 +28,67 @@ def parse_tagging_info(tagging_info_buffer):
     return tagging_info_dict
 
 
+def find_background(vals, nbins=10):
+    background_val = 0
+    counts, bins = histogram(vals, bins=nbins)
+    for n in range(len(counts)):
+        # if the count in the first n bins is greater than 10% of all the vals
+        if counts[:n+1].sum() > vals.size/10.:
+            background_val = bins[n+1]
+            break
+    if background_val == 0:
+        print "Warning, background value not found and using 0."
+    return background_val
+
+def find_steady_state_max(vals, nbins=10):
+    steady_state_max_val = 100000
+    counts, bins = histogram(vals, bins=nbins)
+    count_range = range(len(counts))
+    count_range.reverse()
+    for n in count_range:
+        # if the count in the first n bins is greater than 10% of all the vals
+        if counts[:n+1].sum() > vals.size/10.:
+            steady_state_max_val = bins[n]
+            break
+    if steady_state_max_val == 100000:
+        print "Warning, background value not found and using 100000."
+    return steady_state_max_val
 
 
-def event_detector(time_ticks, vals, background_level=60):
+def find_background_dumb(vals):
+    """
+    Just takes the mean of the first 60*0.1665 secs of data (about 10 seconds)
+    """
+    iter_spot = 1
+    # taking the moving average until one end is below 175 watts
+    # This minimum cutoff seems to be quite variable, probably long-term, constant loads
+    while iter_spot < 8:
+        before_background_val = vals[60*(iter_spot-1):60*(iter_spot)].mean()
+        std_before = vals[60*(iter_spot-1):60*(iter_spot)].std()
+        after_background_val = vals[-60*(iter_spot):-1 - 60*(iter_spot-1)].mean()
+        std_after = vals[-60*(iter_spot):-1 - 60*(iter_spot-1)].std()
+        combined_std = hstack((vals[60*(iter_spot-1):60*(iter_spot)], vals[-60*(iter_spot):-1 - 60*(iter_spot-1)])).std()
+        iter_spot += 1
+        if std_before < 10. or std_after < 10.:
+            steady_state_max = find_steady_state_max(vals)
+            if before_background_val < steady_state_max or after_background_val < steady_state_max:
+                break
+    
+    if std_before > 10.0 and std_after < 10.0:
+        background_val = after_background_val + 5*std_after
+    elif std_before < 10.0 and std_after > 10.0:
+        background_val = before_background_val + 5*std_before
+    elif std_before < 10.0 and std_after < 10.0 and max(before_background_val/after_background_val, after_background_val/before_background_val) > 1.5:
+        background_val = max(before_background_val, after_background_val) + 5*max(std_before, std_after)
+    else:
+        background_val = max(before_background_val, after_background_val) + 3*combined_std
+    return background_val
 
+def event_detector(time_ticks, vals):
+    
+    # background_level = find_background(vals)
+    background_level = find_background_dumb(vals)
+    
     detection_stream = np.gradient(vals)
     peak_locs = signal.find_peaks_cwt(abs(detection_stream), np.array([1]), min_snr=1)
     vetted_peak_locs = list(where(abs(detection_stream[peak_locs]) > 10)[0])
@@ -43,18 +100,26 @@ def event_detector(time_ticks, vals, background_level=60):
 
     for indx in peak_indices:
         continue_expanding = True
+        reached_past_end = False
+        reached_future_end = False
         past_expansion_size = 0
         future_expansion_size = 0
         while continue_expanding:
             continue_expanding = False
-            if vals[indx - past_expansion_size] > background_level:
+            if indx - past_expansion_size <= 0:
+                reached_past_end = True
+            elif vals[indx - past_expansion_size] > background_level:
                 event_index_flag_array[indx - past_expansion_size] = True
                 past_expansion_size+=1
                 continue_expanding = True
-            if vals[indx + future_expansion_size] > background_level:
+            if indx + future_expansion_size >= vals.size:
+                reached_future_end = True
+            elif vals[indx + future_expansion_size] > background_level:
                 event_index_flag_array[indx + future_expansion_size] = True
                 future_expansion_size+=1
                 continue_expanding = True
+            if reached_past_end and reached_future_end:
+                continue_expanding = False
             
     event_edges = where(np.gradient(event_index_flag_array) != 0)[0][::2]
     event_intervals = []
@@ -71,10 +136,10 @@ def event_detector(time_ticks, vals, background_level=60):
 # tagged_training_filename = sys.argv[2]
 
 # This is the directory we're working with presently
-house_dir = "data/H1/"
+house_dir = "data/H2/"
 
 # This is the training file we're investigating
-tagged_training_filename = "Tagged_Training_04_13_1334300401.mat"
+tagged_training_filename = "Tagged_Training_06_13_1339570801.mat"
 
 
 # Read in the matlab datafile
@@ -139,10 +204,11 @@ L2_Pf = np.cos(np.angle(L2_P))
 # This is the cropped HF time series
 # HF_TimeTicks_window = HF_TimeTicks[HF_start_index:HF_end_index]
 
-for appliance_id in taggingInfo_dict.keys():
-# for appliance_id in [38]:
+# for appliance_id in taggingInfo_dict.keys():
+for appliance_id in [35]:
     appliance_name = taggingInfo_dict[appliance_id]['ApplianceName']
     for interval in taggingInfo_dict[appliance_id]['OnOffSeq']:
+    # for interval in [taggingInfo_dict[appliance_id]['OnOffSeq'][3]]:
     
         start_time = interval[0] - 75
         end_time = interval[1] + 75
@@ -188,22 +254,24 @@ for appliance_id in taggingInfo_dict.keys():
         L2_TimeTicks_window_shifted = L2_TimeTicks_window - HF_TimeTicks_window[0]
         tagged_event_middle_time = (interval[0] + interval[1])/2.0 - HF_TimeTicks_window[0]
 
-        background_levels_array = [60, 75, 100, 150, 200, 300, 400]
-        for bl in background_levels_array:
-            try:
-                L1_Real_event_intervals, L1_Real_event_index_flag_array = event_detector(L1_TimeTicks_window_shifted, L1_Real_window, background_level=bl)
-                if L1_Real_event_intervals.size != 0:
-                    break
-            except:
-                continue
-        
-        for bl in background_levels_array:
-            try:
-                L2_Real_event_intervals, L2_Real_event_index_flag_array = event_detector(L2_TimeTicks_window_shifted, L2_Real_window, background_level=bl)
-                if L2_Real_event_intervals.size != 0:
-                    break
-            except:
-                continue
+#         background_levels_array = [60, 75, 100, 150, 200, 300, 400]
+#         for bl in background_levels_array:
+#             try:
+#                 L1_Real_event_intervals, L1_Real_event_index_flag_array = event_detector(L1_TimeTicks_window_shifted, L1_Real_window, background_level=bl)
+#                 if L1_Real_event_intervals.size != 0:
+#                     break
+#             except:
+#                 continue
+#         
+#         for bl in background_levels_array:
+#             try:
+#                 L2_Real_event_intervals, L2_Real_event_index_flag_array = event_detector(L2_TimeTicks_window_shifted, L2_Real_window, background_level=bl)
+#                 if L2_Real_event_intervals.size != 0:
+#                     break
+#             except:
+#                 continue
+        L1_Real_event_intervals, L1_Real_event_index_flag_array = event_detector(L1_TimeTicks_window_shifted, L1_Real_window)
+        L2_Real_event_intervals, L2_Real_event_index_flag_array = event_detector(L2_TimeTicks_window_shifted, L2_Real_window)
         
         if L1_Real_event_intervals.size == 0 and L2_Real_event_intervals.size == 0:
             event_intervals = array([[interval[0] - HF_TimeTicks_window[0],  interval[1] - HF_TimeTicks_window[0]]])
@@ -215,11 +283,17 @@ for appliance_id in taggingInfo_dict.keys():
                 event_intervals.append(event_interval)
             event_intervals = np.array(event_intervals)
         
-        detected_events_with_labeled_time_offset = []
+        detected_events_with_temporal_metric = []
         for event_interval in event_intervals:
-            detected_events_with_labeled_time_offset.append([abs(event_interval.sum()/2 - tagged_event_middle_time), event_interval])
-        detected_events_with_labeled_time_offset.sort()
-        detected_event_interval = detected_events_with_labeled_time_offset[0][1]
+            time_offset = abs(event_interval.sum()/2 - tagged_event_middle_time)
+            time_width = event_interval[1]-event_interval[0]
+            metric = abs(event_interval.sum()/2 - tagged_event_middle_time) / time_width
+            # Metric is abs time distance from middle of tagged time, divided by the width
+            # We want to pick the event which is closest to the center, but also the widest
+            detected_events_with_temporal_metric.append([metric, event_interval])
+        detected_events_with_temporal_metric.sort()
+        
+        detected_event_interval = detected_events_with_temporal_metric[0][1]
         
         
         
@@ -253,9 +327,10 @@ for appliance_id in taggingInfo_dict.keys():
         after_event_time = detected_event_interval[1] + 5.0 # 5 second leeway
         middle_event_time = detected_event_interval.sum()/2
         
-        before_event_HF_Time_index = where(abs(HF_TimeTicks_window_shifted - before_event_time) == min(abs(HF_TimeTicks_window_shifted - before_event_time)))[0]
-        middle_event_HF_Time_index = where(abs(HF_TimeTicks_window_shifted - middle_event_time) == min(abs(HF_TimeTicks_window_shifted - middle_event_time)))[0]
-        after_event_HF_Time_index = where(abs(HF_TimeTicks_window_shifted - after_event_time) == min(abs(HF_TimeTicks_window_shifted - after_event_time)))[0]
+        
+        before_event_HF_Time_index = where(abs(HF_TimeTicks_window_shifted - before_event_time) == min(abs(HF_TimeTicks_window_shifted - before_event_time)))[0] + HF_start_index
+        middle_event_HF_Time_index = where(abs(HF_TimeTicks_window_shifted - middle_event_time) == min(abs(HF_TimeTicks_window_shifted - middle_event_time)))[0] + HF_start_index
+        after_event_HF_Time_index = where(abs(HF_TimeTicks_window_shifted - after_event_time) == min(abs(HF_TimeTicks_window_shifted - after_event_time)))[0] + HF_start_index
 
         # Create the big plot
 
@@ -342,11 +417,11 @@ for appliance_id in taggingInfo_dict.keys():
         ax19.set_xlim(0,4096)
         ax19.set_ylim(0,255)
         setp(ax19.get_xticklabels(), visible=False)
-        ax19.legend(loc="upper left")
+        ax19.legend(loc="lower left")
         ax20.plot(diff_before_spectrum, color="brown", label="D-B")
         ax20.plot(diff_after_spectrum, color="darkcyan", label="D-A")
 
-        ax20.legend(loc="upper right")
+        ax20.legend(loc="upper left")
         ax20.set_xlim(0,4096)
         ax20.set_ylabel("Difference")
         ax20.set_xlabel("FFT Vector (Frequency-space)")
