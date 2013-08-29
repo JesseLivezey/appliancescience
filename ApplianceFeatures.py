@@ -70,6 +70,9 @@ def GetDataFrames(filename,clobber=False,save_all=False):
     if str(pathlist[0]) == "Testing":
         teststr = "_testing"
         date_str = str(pathlist[1]) + '-' + str(pathlist[2])
+        if not save_all:
+            print "{} does not appear to be a training data set. Not truncating.".format(filename)
+            save_all = True
     elif str(pathlist[0]) == "Tagged":
         teststr = ''
         date_str = str(pathlist[2]) + '-' + str(pathlist[3])
@@ -171,7 +174,9 @@ def GetDataFrames(filename,clobber=False,save_all=False):
     "i3":LF1I[:,3],      
     "i4":LF1I[:,4], 
     "i5":LF1I[:,5],
-    }, index = (L1_TimeTicks*1e6).astype('datetime64[ms]'))
+    }, index = (L1_TimeTicks*1e9).astype('datetime64[ns]'))
+    
+    # index = (L1_TimeTicks*1e9).astype('datetime64[ns]')
     
     dfL2 = pd.DataFrame({
     "v0":LF2V[:,0],
@@ -186,7 +191,7 @@ def GetDataFrames(filename,clobber=False,save_all=False):
     "i3":LF2I[:,3],      
     "i4":LF2I[:,4], 
     "i5":LF2I[:,5],
-    }, index = (L2_TimeTicks*1e6).astype('datetime64[ms]'))
+    }, index = (L2_TimeTicks*1e9).astype('datetime64[ns]'))
     
     # dfL1 = pd.DataFrame({
     # "real":L1_Real,
@@ -198,7 +203,7 @@ def GetDataFrames(filename,clobber=False,save_all=False):
     # "pf3":L1_Pf[:,3],
     # "pf4":L1_Pf[:,4],
     # "pf5":L1_Pf[:,5]
-    # }, index = (L1_TimeTicks*1e6).astype('datetime64[ms]')
+    # }, index = (L1_TimeTicks*1e9).astype('datetime64[ns]')
     # )
     # 
     # dfL2 = pd.DataFrame({
@@ -211,7 +216,7 @@ def GetDataFrames(filename,clobber=False,save_all=False):
     # "pf3":L2_Pf[:,3],
     # "pf4":L2_Pf[:,4],
     # "pf5":L2_Pf[:,5]
-    # }, index = (L2_TimeTicks*1e6).astype('datetime64[ms]')
+    # }, index = (L2_TimeTicks*1e9).astype('datetime64[ms]')
     # )
     
     
@@ -230,11 +235,9 @@ def GetDataFrames(filename,clobber=False,save_all=False):
     
     
     # 4096 columns, rows indexed by time
-    dfHF=pd.DataFrame(HF.transpose(),index=(HF_TimeTicks*1e6).astype('datetime64[ms]'),columns=np.arange(4096))
+    dfHF=pd.DataFrame(HF.transpose(),index=(HF_TimeTicks*1e9).astype('datetime64[ns]'),columns=np.arange(4096))
 
-    if not save_all and "TaggingInfo" not in buf:
-        print "{} does not appear to be a training data set. Not truncating.".format(filename)
-        save_all = True
+
         
     if not save_all:
         # Parse the tagged info for appliance identification
@@ -254,12 +257,14 @@ def GetDataFrames(filename,clobber=False,save_all=False):
         truncate_stop = np.max(interval_stops) + 1000
         truncate_start = pd.Timestamp(datetime.fromtimestamp(truncate_start))
         truncate_stop = pd.Timestamp(datetime.fromtimestamp(truncate_stop))
-    
+        
         print "Truncating the data to the time windows of relevance: {}-{}".format(truncate_start,truncate_stop)
         dfL1 = dfL1.loc[(dfL1.index < truncate_stop) & (dfL1.index > truncate_start)]
         dfL2 = dfL2.loc[(dfL2.index < truncate_stop) & (dfL2.index > truncate_start)]
         dfHF = dfHF.loc[(dfHF.index < truncate_stop) & (dfHF.index > truncate_start)]
-    
+        
+        
+        
     print "Saving data frames to hdf5: {}".format(outh5)
     store = pd.HDFStore(outh5)
     store['dfl1'] = dfL1
