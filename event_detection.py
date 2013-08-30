@@ -229,14 +229,14 @@ def event_detector2(time_ticks, vals):
 
 
 
-# house_dir = sys.argv[1]
-# tagged_training_filename = sys.argv[2]
+house_dir = sys.argv[1]
+tagged_training_filename = sys.argv[2]
 
 # This is the directory we're working with presently
-house_dir = "data/H2/"
+# house_dir = "data/H2/"
 
 # This is the training file we're investigating
-tagged_training_filename = "Tagged_Training_02_15_1360915201.mat"
+# tagged_training_filename = "Tagged_Training_02_15_1360915201.mat"
 
 
 # Read in the matlab datafile
@@ -538,5 +538,5 @@ for appliance_id in taggingInfo_dict.keys():
             
         except:
             error_log_file = file("error_log.txt", "a")
-            error_log_file.write(house_dir[-3:-1] + "_" + str(int(round((start_time + end_time)/2.0))) + "_" + appliance_name.replace(" ", "") + "\n")
+            error_log_file.write(house_dir[-3:-1] + "," + str(appliance_id) "," + appliance_name.replace(" ", "") + "," + str(int(round((start_time + end_time)/2.0))) + "\n")
             error_log_file.close()
