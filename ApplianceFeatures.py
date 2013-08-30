@@ -148,7 +148,6 @@ def GetDataFrames(filename,clobber=False,save_all=False):
     HF_TimeTicks = buf['TimeTicksHF'][0][0].flatten()
 
 
-
     # the timeticks for L1 and L2 are not in fact equal.. 
     # assert len(L1_TimeTicks) == len(L2_TimeTicks)
     # assert L1_TimeTicks[0] == L2_TimeTicks[0]
@@ -248,14 +247,17 @@ def GetDataFrames(filename,clobber=False,save_all=False):
     
         truncate_start = np.min(interval_starts) - 1000
         truncate_stop = np.max(interval_stops) + 1000
-        truncate_start = pd.Timestamp(datetime.fromtimestamp(truncate_start))
-        truncate_stop = pd.Timestamp(datetime.fromtimestamp(truncate_stop))
+        # MUST convert these to the same datetime in pandas; having weird issues
+        # with timezones if i did it the old way.
+        truncate_start = pd.to_datetime([truncate_start],unit='s')
+        truncate_stop = pd.to_datetime([truncate_stop],unit='s')
+        
         
         print "Truncating the data to the time windows of relevance: {}-{}".format(truncate_start,truncate_stop)
+        
         dfL1 = dfL1.loc[(dfL1.index < truncate_stop) & (dfL1.index > truncate_start)]
         dfL2 = dfL2.loc[(dfL2.index < truncate_stop) & (dfL2.index > truncate_start)]
         dfHF = dfHF.loc[(dfHF.index < truncate_stop) & (dfHF.index > truncate_start)]
-        
         
         
     print "Saving data frames to hdf5: {}".format(outh5)
@@ -290,30 +292,16 @@ class ElectricTimeStream:
         
     def ExtractComponents(self):
         
-        # dfL1 = pd.DataFrame({
-        # "v0":LF1V[:,0],
-        # "v1":LF1V[:,1],
-        # "v2":LF1V[:,2],
-        # "v3":LF1V[:,3],      
-        # "v4":LF1V[:,4], 
-        # "v5":LF1V[:,5],   
-        # "i0":LF1I[:,0],
-        # "i1":LF1I[:,1],
-        # "i2":LF1I[:,2],
-        # "i3":LF1I[:,3],      
-        # "i4":LF1I[:,4], 
-        # "i5":LF1I[:,5],
-        # }, index = (L1_TimeTicks*1e9).astype('datetime64[ns]'))
-        
-        LF1I = self.dfl1.loc[:,['i0','i1','i2','i3','i4','i5']]
-        LF1V = self.dfl1.loc[:,['v0','v1','v2','v3','v4','v5']]
+     
+        LF1I = np.array(self.dfl1.loc[:,['i0','i1','i2','i3','i4','i5']],dtype="complex64")
+        LF1V = np.array(self.dfl1.loc[:,['v0','v1','v2','v3','v4','v5']],dtype="complex64")
 
-        LF2I = self.dfl2.loc[:,['i0','i1','i2','i3','i4','i5']]
-        LF2V = self.dfl2.loc[:,['v0','v1','v2','v3','v4','v5']]
+        LF2I = np.array(self.dfl2.loc[:,['i0','i1','i2','i3','i4','i5']],dtype="complex64")
+        LF2V = np.array(self.dfl2.loc[:,['v0','v1','v2','v3','v4','v5']],dtype="complex64")
         
         # Calculate power (by convolution)
-        L1_P = np.array(LF1V) * np.array(LF1I).conjugate()      # Nx6, N is number of time steps
-        L2_P = np.array(LF2V) * np.array(LF2I).conjugate()
+        L1_P = LF1V * LF1I.conjugate()      # Nx6, N is number of time steps
+        L2_P = LF2V * LF2I.conjugate()
         # #
         L1_ComplexPower = L1_P.sum(axis=1)          # length N, N is number of time steps
         L2_ComplexPower = L2_P.sum(axis=1)          # length N, N is number of time steps
@@ -328,8 +316,21 @@ class ElectricTimeStream:
         # # Power Factor 
         L1_Pf = np.cos(np.angle(L1_P))
         L2_Pf = np.cos(np.angle(L2_P))
+
+        self.l1comp = pd.DataFrame({
+        "real":L1_Real,
+        "imag":L1_Imag,
+        "amp":L1_Amp,
+        "pf0":L1_Pf[:,0],
+        "pf1":L1_Pf[:,1],
+        "pf2":L1_Pf[:,2],
+        "pf3":L1_Pf[:,3],
+        "pf4":L1_Pf[:,4],
+        "pf5":L1_Pf[:,5]
+        }, index = self.dfl1.index
+        )
         
-        self.dfl2comp = pd.DataFrame({
+        self.l2comp = pd.DataFrame({
         "real":L2_Real,
         "imag":L2_Imag,
         "amp":L2_Amp,
