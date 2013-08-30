@@ -538,5 +538,5 @@ for appliance_id in taggingInfo_dict.keys():
             
         except:
             error_log_file = file("error_log.txt", "a")
-            error_log_file.write(house_dir[-3:-1] + "," + str(appliance_id) "," + appliance_name.replace(" ", "") + "," + str(int(round((start_time + end_time)/2.0))) + "\n")
+            error_log_file.write(house_dir[-3:-1] + "," + str(appliance_id) + "," + appliance_name.replace(" ", "") + "," + str(int(round((start_time + end_time)/2.0))) + "\n")
             error_log_file.close()
