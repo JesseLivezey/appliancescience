@@ -128,21 +128,17 @@ def GetDataFrames(filename,clobber=False,save_all=False):
     off any data < 1000s before the first tagged start time and any data 
     > 1000s after the last tagged end time
     
-    
-    
     '''
-    # appliance_id = "H1A8"  
     gc.collect()
     
     if not os.path.exists(filename):
         raise IOError('Cannot find the specified filename')
     
-    # In [22]: os.path.basename("data/H1/Tagged_Training_04_13_1334300401.mat").split('_')
-    # Out[22]: ['Tagged', 'Training', '04', '13', '1334300401.mat']        
+    # os.path.basename("data/H1/Tagged_Training_04_13_1334300401.mat").split('_')
+    # ['Tagged', 'Training', '04', '13', '1334300401.mat']        
     pathlist = os.path.basename(filename).split('_')
     
-
-    
+    # determine whether we are testing or training data, or neither
     if str(pathlist[0]) == "Testing":
         teststr = "_testing"
         date_str = str(pathlist[1]) + '-' + str(pathlist[2])
@@ -153,7 +149,7 @@ def GetDataFrames(filename,clobber=False,save_all=False):
         teststr = ''
         date_str = str(pathlist[2]) + '-' + str(pathlist[3])
     else:
-        raise IOError
+        raise IOError("Cannot parse the file {}. Is it a matlab file?".format(filename))
         
     # assuming directory structure data/H1/Tagged_Training_04_13_1334300401.mat
     house_id = os.path.dirname(filename).split('/')[-1]
@@ -167,10 +163,6 @@ def GetDataFrames(filename,clobber=False,save_all=False):
             print "Cannot create directory for hdf5 files."
             return None
     
-    outkey = house_id + '_' + date_str
-    
-
-        
     outh5 = outdir + house_id + '_' + date_str + teststr + '.h5'
     # outh5l2 = outdir + house_id + '_' + date_str + 'l2.h5'
     # outh5hf = outdir + house_id + '_' + date_str + 'hf.h5'
@@ -180,19 +172,15 @@ def GetDataFrames(filename,clobber=False,save_all=False):
         # reloading it, reload the buffer
         # Read in the matlab datafile
         if not os.path.exists(outh5):
-            print "Saved data does not exist for {}: Converting from matlab binary".format(outkey)
+            print "Saved data does not exist for {}: Converting from matlab binary".format(outh5)
         elif clobber:
-            print "Saved data already exists for {} but clobber == True; overwriting".format(outkey)
-            
+            print "Saved data already exists for {} but clobber == True; overwriting".format(ou5h5)
         buf = io.loadmat(filename)['Buffer']
-
     else:
-
         print "Saved data for {} already exists.\n>Loading {}".format(filename,outh5)
         return LoadHDF5(outh5)
 
 
-    
     # These are the voltage and current time-series FFT fundamental and first 5
     # harmonics measurements.
     LF1V = buf['LF1V'][0][0]                    # Nx6, N is number of time steps
@@ -210,50 +198,12 @@ def GetDataFrames(filename,clobber=False,save_all=False):
     HF_TimeTicks = buf['TimeTicksHF'][0][0].flatten()
 
 
-    # the timeticks for L1 and L2 are not in fact equal.. 
-    # assert len(L1_TimeTicks) == len(L2_TimeTicks)
-    # assert L1_TimeTicks[0] == L2_TimeTicks[0]
-    # assert L1_TimeTicks[-1] == L2_TimeTicks[-1]
-    
-    # dfL1 = pd.DataFrame({
-    # "v0":LF1V[:,0],
-    # "v1":LF1V[:,1],
-    # "v2":LF1V[:,2],
-    # "v3":LF1V[:,3],      
-    # "v4":LF1V[:,4], 
-    # "v5":LF1V[:,5],   
-    # "i0":LF1I[:,0],
-    # "i1":LF1I[:,1],
-    # "i2":LF1I[:,2],
-    # "i3":LF1I[:,3],      
-    # "i4":LF1I[:,4], 
-    # "i5":LF1I[:,5],
-    # }, index = (L1_TimeTicks*1e9).astype('datetime64[ns]'))
-    
-    # index = (L1_TimeTicks*1e9).astype('datetime64[ns]')
-    
-    # dfL2 = pd.DataFrame({
-    # "v0":LF2V[:,0],
-    # "v1":LF2V[:,1],
-    # "v2":LF2V[:,2],
-    # "v3":LF2V[:,3],      
-    # "v4":LF2V[:,4], 
-    # "v5":LF2V[:,5],   
-    # "i0":LF2I[:,0],
-    # "i1":LF2I[:,1],
-    # "i2":LF2I[:,2],
-    # "i3":LF2I[:,3],      
-    # "i4":LF2I[:,4], 
-    # "i5":LF2I[:,5],
-    # }, index = (L2_TimeTicks*1e9).astype('datetime64[ns]'))
-    # 
-    # 
+    # make the MultiIndex; 6 instances each of v and i
     typelist = ['v']*6 + ['i']*6
     numlist =['0','1','2','3','4','5']*2
     arrays = [typelist,numlist]
     tuples = zip(*arrays)
     compindex = pd.MultiIndex.from_tuples(tuples,names=['component','harmonic'])
-    
     
     # build up multiindex data frame 
     dfL1fullarr = np.zeros((len(L1_TimeTicks),12),dtype="complex64")
@@ -282,8 +232,7 @@ def GetDataFrames(filename,clobber=False,save_all=False):
     #         plt.text(interval[1],500,appliance_name+'-',color='blue')
     # plt.show()
 
-
-        
+    # Truncate the data down to get rid of unnecessary info    
     if not save_all:
         # Parse the tagged info for appliance identification
         # save them in a pkl file for later usage
@@ -312,9 +261,9 @@ def GetDataFrames(filename,clobber=False,save_all=False):
         # with timezones if i did it the old way.
         truncate_start = pd.to_datetime([truncate_start],unit='s')
         truncate_stop = pd.to_datetime([truncate_stop],unit='s')
+
         
-        
-        print "Truncating the data to the time windows of relevance: {}-{}".format(truncate_start,truncate_stop)
+        print "Truncating the data to the time windows of relevance: {}-{}".format(str(truncate_start),str(truncate_stop))
         
         dfL1 = dfL1.loc[(dfL1.index < truncate_stop) & (dfL1.index > truncate_start)]
         dfL2 = dfL2.loc[(dfL2.index < truncate_stop) & (dfL2.index > truncate_start)]
@@ -345,6 +294,36 @@ def rollingavg(arr,binsize):
 
 
 class ElectricTimeStream:
+    '''
+    Class for any timeseries of electrical data saved to an HDF5 file using
+    GetDataFrames().  The nominal data frames are the 6 voltage and current 
+    components for the two channels, stored in self.dfl1 and self.dfl2, and 
+    the high frequency information, stored in self.dfhf.
+    
+    To extract the real, imaginary, amplitude, and pf components, run
+    ExtractComponents(). This will create two new data frames, self.l1comp and
+    self.l2comp, which contain these components. You can index them as follows:
+    
+    import ApplianceFeatures as ap
+    # Read in Electric Time Stream
+    datafilename = "H1_07-09_testing.h5"
+    ts = ap.ElectricTimeStream("data/hdf5storage/" + datafilename)
+    # Extract Components on the ap object
+    ts.ExtractComponents()
+    
+    # Get the timeseries of the 6 real components from channel l1:
+    ts.l1comp['real']  # or ts.l1comp.real
+    
+    # Get the timeseries of the 3rd imaginary component from l2:
+    ts.l2comp['imag']['2']
+    
+    # Get the timeseries of the real components between 9:30 and 9:48 pm
+    subts = ts.l1comp['real'].loc[(ts.l1comp.index > "2012-10-22 21:30:00") & (ts.l1comp.index < "2012-10-22 21:48:00")]
+    
+    # plot all of the components of a data frame
+    subts.plot()
+    
+    '''
     def __init__(self,hdf5file):
         dfL1, dfL2, dfHF = LoadHDF5(hdf5file)
         self.dfl1 = dfL1
@@ -373,12 +352,7 @@ class ElectricTimeStream:
             print "Malformed hdf5 file. Cannot extract data."
             return    
         
-        typelist=['real']*6 + ['imag']*6 + ['amp']*6 + ['pf']*6
-        numlist =['0','1','2','3','4','5']*4
-        arrays = [typelist,numlist]
-        tuples = zip(*arrays)
-        
-        
+
         # Calculate power (by convolution)
         L1_P = LF1V * LF1I.conjugate()      # Nx6, N is number of time steps
         L2_P = LF2V * LF2I.conjugate()
@@ -397,7 +371,11 @@ class ElectricTimeStream:
         L1_Pf = np.cos(np.angle(L1_P))
         L2_Pf = np.cos(np.angle(L2_P))
         
-        
+        # build up the multiindex; 6 instances each of real, image, amp, pf
+        typelist=['real']*6 + ['imag']*6 + ['amp']*6 + ['pf']*6
+        numlist =['0','1','2','3','4','5']*4
+        arrays = [typelist,numlist]
+        tuples = zip(*arrays)
         compindex = pd.MultiIndex.from_tuples(tuples,names=['component','harmonic'])
         
         # build up multiindex data frame 
@@ -407,16 +385,14 @@ class ElectricTimeStream:
         dfl1fullarr[:,12:18] = L1_Amp
         dfl1fullarr[:,18:24] = L1_Pf
         self.l1comp = pd.DataFrame(dfl1fullarr,index = self.dfl1.index, columns = compindex)
-    
-    
+      
         dfl2fullarr = np.zeros((len(self.dfl2.index),24),dtype='float64')
         dfl2fullarr[:,0:6] = L2_Real
         dfl2fullarr[:,6:12] = L2_Imag
         dfl2fullarr[:,12:18] = L2_Amp
         dfl2fullarr[:,18:24] = L2_Pf
         self.l2comp = pd.DataFrame(dfl2fullarr,index = self.dfl2.index, columns = compindex)
-    
-        
+                
         
 class Appliance: #make as a sub class of ElectricTimeStream?
     def __init__(self,applianceid):    
