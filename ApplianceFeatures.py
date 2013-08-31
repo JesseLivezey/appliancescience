@@ -359,7 +359,7 @@ class ElectricTimeStream:
         dfl2fullarr[:,6:12] = L2_Imag
         dfl2fullarr[:,12:18] = L2_Amp
         dfl2fullarr[:,18:24] = L2_Pf
-        self.l2comp = pd.DataFrame(dfl1fullarr,index = self.dfl2.index, columns = compindex)
+        self.l2comp = pd.DataFrame(dfl2fullarr,index = self.dfl2.index, columns = compindex)
     
         
         
