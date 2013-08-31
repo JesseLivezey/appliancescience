@@ -20,14 +20,69 @@ import cPickle as pickle
 import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
+from datetime import timedelta
 import glob
 import gc
 
-def _getEventTimes():
-    raise NotImplementedError
-    df=pd.read_csv("allevents.csv",skiprows=4,names=['house','id','name','start','stop'])
-    # grab the file names from the pkl
+def _updateFileTimes():
+    '''
+    Loop through the HDF5 training files and build a database of the start and
+    stop times of each, to allow for lookup of the relevant data file when 
+    investigating an individual appliance instance.  Save them as a csv file.
+    '''
+    hdf5list = glob.glob("data/hdf5storage/H?_??-??.h5")
+    startlist = []
+    stoplist = []
+    matlist = []
+    matgloblist = glob.glob("data/H?/Tagged_Training*.mat")
+    for hdf5file in hdf5list:
+        mat_matches = []
+        housedatestr = hdf5file.split('/')[-1].replace('.h5','')
+        housestr,datestr = housedatestr.split('_')
+        for matfile in matgloblist:
+            if (housestr in matfile) and (datestr.replace('-','_') in matfile):
+                mat_matches.append(matfile)
+        assert len(mat_matches) == 1
+        matlist.append(mat_matches[0]) 
+        dfl1, dfl2, dfhf = LoadHDF5(hdf5file)
+        # populate the start and stop times of each file by adding a 2 minute
+        # window to the min and max index value for one of the data frames
+        # (the resolution isnt high enough for it to matter which one)
+        startlist.append(pd.to_datetime(dfhf.index.min()-timedelta(minutes=2)))
+        stoplist.append(pd.to_datetime(dfhf.index.max()+timedelta(minutes=2)))
+    filedf = pd.DataFrame({
+    "filename":hdf5list,
+    "matfile":matlist,
+    "filestart":startlist,
+    "filestop":stoplist
+    })
     
+    filedf.to_csv("data/filetimes.csv")
+    print "Saved to data/filetimes.csv"
+    # outh5 = "data/tagging.h5"
+    # print "Saving data frames to hdf5: {}".format(outh5)
+    # store = pd.HDFStore(outh5)
+    # store['filetimes'] = filedf
+    # store.close()
+    return filedf
+    
+def _updateEventTimes():
+    '''
+    Grab the start/stop times of each training event from allevents.csv;
+    Store as a pandas dataframe, and store it in the tagging.h5 file
+    
+    No longer implemented. the hdf5 files were too large. just sticking with csv.
+    
+    '''
+    raise NotImplementedError
+    eventdf=pd.read_csv("data/allevents.csv",skiprows=4,names=['house','id','name','start','stop'])
+    outh5 = "data/tagging.h5"
+    print "Saving data frames to hdf5: {}".format(outh5)
+    store = pd.HDFStore(outh5)
+    store['eventtimes'] = eventdf
+    store.close()
+    return eventdf
+    # grab the file names from the pkl
     
 def LoopAndStore(globpath,clobber=False,save_all=False):
     '''
