@@ -304,7 +304,6 @@ class ElectricTimeStream:
         arrays = [typelist,numlist]
         tuples = zip(*arrays)
         
-        compindex = pd.MultiIndex.from_tuples(tuples,names=['component','harmonic'])
         
         # Calculate power (by convolution)
         L1_P = LF1V * LF1I.conjugate()      # Nx6, N is number of time steps
@@ -325,28 +324,24 @@ class ElectricTimeStream:
         L2_Pf = np.cos(np.angle(L2_P))
         
         
+        compindex = pd.MultiIndex.from_tuples(tuples,names=['component','harmonic'])
+        
+        # build up multiindex data frame 
         dfl1fullarr = np.zeros((len(self.dfl1.index),24))
-
         dfl1fullarr[:,0:6] = L1_Real
         dfl1fullarr[:,6:12] = L1_Imag
         dfl1fullarr[:,12:18] = L1_Amp
         dfl1fullarr[:,18:24] = L1_Pf
-        
-        self.l1comp = pd.DataFrame(dfl1fullarr, index = self.dfl1.index, columns = compindex)
+        self.l1comp = pd.DataFrame(dfl1fullarr,index = self.dfl1.index, columns = compindex)
     
-        
-        # self.l2comp = pd.DataFrame({
-        #        "real":L2_Real,
-        #        "imag":L2_Imag,
-        #        "amp":L2_Amp,
-        #        "pf0":L2_Pf[:,0],
-        #        "pf1":L2_Pf[:,1],
-        #        "pf2":L2_Pf[:,2],
-        #        "pf3":L2_Pf[:,3],
-        #        "pf4":L2_Pf[:,4],
-        #        "pf5":L2_Pf[:,5]
-        #        }, index = self.dfl2.index
-        #        )
+    
+        dfl2fullarr = np.zeros((len(self.dfl2.index),24))
+        dfl2fullarr[:,0:6] = L2_Real
+        dfl2fullarr[:,6:12] = L2_Imag
+        dfl2fullarr[:,12:18] = L2_Amp
+        dfl2fullarr[:,18:24] = L2_Pf
+        self.l2comp = pd.DataFrame(dfl1fullarr,index = self.dfl2.index, columns = compindex)
+    
         
         
 class Appliance: #make as a sub class of ElectricTimeStream?
