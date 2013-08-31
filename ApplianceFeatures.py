@@ -299,12 +299,19 @@ class ElectricTimeStream:
         LF2I = np.array(self.dfl2.loc[:,['i0','i1','i2','i3','i4','i5']],dtype="complex64")
         LF2V = np.array(self.dfl2.loc[:,['v0','v1','v2','v3','v4','v5']],dtype="complex64")
         
+        typelist=['real']*6 + ['imag']*6 + ['amp']*6 + ['pf']*6
+        numlist =['0','1','2','3','4','5']*4
+        arrays = [typelist,numlist]
+        tuples = zip(*arrays)
+        
+        compindex = pd.MultiIndex.from_tuples(tuples,names=['component','harmonic'])
+        
         # Calculate power (by convolution)
         L1_P = LF1V * LF1I.conjugate()      # Nx6, N is number of time steps
         L2_P = LF2V * LF2I.conjugate()
         # #
-        L1_ComplexPower = L1_P.sum(axis=1)          # length N, N is number of time steps
-        L2_ComplexPower = L2_P.sum(axis=1)          # length N, N is number of time steps
+        L1_ComplexPower = L1_P#.sum(axis=1)          # length N, N is number of time steps
+        L2_ComplexPower = L2_P#.sum(axis=1)          # length N, N is number of time steps
         # 
         # # Extract components
         L1_Real = L1_ComplexPower.real
@@ -316,32 +323,30 @@ class ElectricTimeStream:
         # # Power Factor 
         L1_Pf = np.cos(np.angle(L1_P))
         L2_Pf = np.cos(np.angle(L2_P))
-
-        self.l1comp = pd.DataFrame({
-        "real":L1_Real,
-        "imag":L1_Imag,
-        "amp":L1_Amp,
-        "pf0":L1_Pf[:,0],
-        "pf1":L1_Pf[:,1],
-        "pf2":L1_Pf[:,2],
-        "pf3":L1_Pf[:,3],
-        "pf4":L1_Pf[:,4],
-        "pf5":L1_Pf[:,5]
-        }, index = self.dfl1.index
-        )
         
-        self.l2comp = pd.DataFrame({
-        "real":L2_Real,
-        "imag":L2_Imag,
-        "amp":L2_Amp,
-        "pf0":L2_Pf[:,0],
-        "pf1":L2_Pf[:,1],
-        "pf2":L2_Pf[:,2],
-        "pf3":L2_Pf[:,3],
-        "pf4":L2_Pf[:,4],
-        "pf5":L2_Pf[:,5]
-        }, index = self.dfl2.index
-        )
+        
+        dfl1fullarr = np.zeros((len(self.dfl1.index),24))
+
+        dfl1fullarr[:,0:6] = L1_Real
+        dfl1fullarr[:,6:12] = L1_Imag
+        dfl1fullarr[:,12:18] = L1_Amp
+        dfl1fullarr[:,18:24] = L1_Pf
+        
+        self.l1comp = pd.DataFrame(dfl1fullarr, index = self.dfl1.index, columns = compindex)
+    
+        
+        # self.l2comp = pd.DataFrame({
+        #        "real":L2_Real,
+        #        "imag":L2_Imag,
+        #        "amp":L2_Amp,
+        #        "pf0":L2_Pf[:,0],
+        #        "pf1":L2_Pf[:,1],
+        #        "pf2":L2_Pf[:,2],
+        #        "pf3":L2_Pf[:,3],
+        #        "pf4":L2_Pf[:,4],
+        #        "pf5":L2_Pf[:,5]
+        #        }, index = self.dfl2.index
+        #        )
         
         
 class Appliance: #make as a sub class of ElectricTimeStream?
