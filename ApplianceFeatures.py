@@ -23,6 +23,12 @@ from datetime import datetime
 import glob
 import gc
 
+def _getEventTimes():
+    raise NotImplementedError
+    df=pd.read_csv("allevents.csv",skiprows=4,names=['house','id','name','start','stop'])
+    # grab the file names from the pkl
+    
+    
 def LoopAndStore(globpath,clobber=False,save_all=False):
     '''
     Given a globpath such as 'data/H?/Tagged_Training_*.mat', loop through 
@@ -80,6 +86,7 @@ def GetDataFrames(filename,clobber=False,save_all=False):
     # Out[22]: ['Tagged', 'Training', '04', '13', '1334300401.mat']        
     pathlist = os.path.basename(filename).split('_')
     
+
     
     if str(pathlist[0]) == "Testing":
         teststr = "_testing"
@@ -153,65 +160,61 @@ def GetDataFrames(filename,clobber=False,save_all=False):
     # assert L1_TimeTicks[0] == L2_TimeTicks[0]
     # assert L1_TimeTicks[-1] == L2_TimeTicks[-1]
     
-    dfL1 = pd.DataFrame({
-    "v0":LF1V[:,0],
-    "v1":LF1V[:,1],
-    "v2":LF1V[:,2],
-    "v3":LF1V[:,3],      
-    "v4":LF1V[:,4], 
-    "v5":LF1V[:,5],   
-    "i0":LF1I[:,0],
-    "i1":LF1I[:,1],
-    "i2":LF1I[:,2],
-    "i3":LF1I[:,3],      
-    "i4":LF1I[:,4], 
-    "i5":LF1I[:,5],
-    }, index = (L1_TimeTicks*1e9).astype('datetime64[ns]'))
+    # dfL1 = pd.DataFrame({
+    # "v0":LF1V[:,0],
+    # "v1":LF1V[:,1],
+    # "v2":LF1V[:,2],
+    # "v3":LF1V[:,3],      
+    # "v4":LF1V[:,4], 
+    # "v5":LF1V[:,5],   
+    # "i0":LF1I[:,0],
+    # "i1":LF1I[:,1],
+    # "i2":LF1I[:,2],
+    # "i3":LF1I[:,3],      
+    # "i4":LF1I[:,4], 
+    # "i5":LF1I[:,5],
+    # }, index = (L1_TimeTicks*1e9).astype('datetime64[ns]'))
     
     # index = (L1_TimeTicks*1e9).astype('datetime64[ns]')
     
-    dfL2 = pd.DataFrame({
-    "v0":LF2V[:,0],
-    "v1":LF2V[:,1],
-    "v2":LF2V[:,2],
-    "v3":LF2V[:,3],      
-    "v4":LF2V[:,4], 
-    "v5":LF2V[:,5],   
-    "i0":LF2I[:,0],
-    "i1":LF2I[:,1],
-    "i2":LF2I[:,2],
-    "i3":LF2I[:,3],      
-    "i4":LF2I[:,4], 
-    "i5":LF2I[:,5],
-    }, index = (L2_TimeTicks*1e9).astype('datetime64[ns]'))
-    
-    # dfL1 = pd.DataFrame({
-    # "real":L1_Real,
-    # "imag":L1_Imag,
-    # "amp":L1_Amp,
-    # "pf0":L1_Pf[:,0],
-    # "pf1":L1_Pf[:,1],
-    # "pf2":L1_Pf[:,2],
-    # "pf3":L1_Pf[:,3],
-    # "pf4":L1_Pf[:,4],
-    # "pf5":L1_Pf[:,5]
-    # }, index = (L1_TimeTicks*1e9).astype('datetime64[ns]')
-    # )
-    # 
     # dfL2 = pd.DataFrame({
-    # "real":L2_Real,
-    # "imag":L2_Imag,
-    # "amp":L2_Amp,
-    # "pf0":L2_Pf[:,0],
-    # "pf1":L2_Pf[:,1],
-    # "pf2":L2_Pf[:,2],
-    # "pf3":L2_Pf[:,3],
-    # "pf4":L2_Pf[:,4],
-    # "pf5":L2_Pf[:,5]
-    # }, index = (L2_TimeTicks*1e9).astype('datetime64[ms]')
-    # )
+    # "v0":LF2V[:,0],
+    # "v1":LF2V[:,1],
+    # "v2":LF2V[:,2],
+    # "v3":LF2V[:,3],      
+    # "v4":LF2V[:,4], 
+    # "v5":LF2V[:,5],   
+    # "i0":LF2I[:,0],
+    # "i1":LF2I[:,1],
+    # "i2":LF2I[:,2],
+    # "i3":LF2I[:,3],      
+    # "i4":LF2I[:,4], 
+    # "i5":LF2I[:,5],
+    # }, index = (L2_TimeTicks*1e9).astype('datetime64[ns]'))
+    # 
+    # 
+    typelist = ['v']*6 + ['i']*6
+    numlist =['0','1','2','3','4','5']*2
+    arrays = [typelist,numlist]
+    tuples = zip(*arrays)
+    compindex = pd.MultiIndex.from_tuples(tuples,names=['component','harmonic'])
     
     
+    # build up multiindex data frame 
+    dfL1fullarr = np.zeros((len(L1_TimeTicks),12),dtype="complex64")
+    dfL1fullarr[:,0:6] = LF1V
+    dfL1fullarr[:,6:12] = LF1I
+    dfL1 = pd.DataFrame(dfL1fullarr,index = (L1_TimeTicks*1e9).astype('datetime64[ns]'), columns = compindex)
+
+    dfL2fullarr = np.zeros((len(L2_TimeTicks),12),dtype="complex64")
+    dfL2fullarr[:,0:6] = LF2V
+    dfL2fullarr[:,6:12] = LF2I
+    dfL2 = pd.DataFrame(dfL2fullarr,index = (L2_TimeTicks*1e9).astype('datetime64[ns]'), columns = compindex)
+    
+    # 4096 columns, rows indexed by time
+    dfHF=pd.DataFrame(HF.transpose(),index=(HF_TimeTicks*1e9).astype('datetime64[ns]'),columns=np.arange(4096))
+
+
     # dfL1.real.plot()
     # raise Exception
     # # plot lines showing the start/stop times
@@ -224,17 +227,20 @@ def GetDataFrames(filename,clobber=False,save_all=False):
     #         plt.text(interval[1],500,appliance_name+'-',color='blue')
     # plt.show()
 
-    
-    
-    # 4096 columns, rows indexed by time
-    dfHF=pd.DataFrame(HF.transpose(),index=(HF_TimeTicks*1e9).astype('datetime64[ns]'),columns=np.arange(4096))
-
 
         
     if not save_all:
         # Parse the tagged info for appliance identification
+        # save them in a pkl file for later usage
+        dictpkl = 'file_specific_tags.pkl'
+        tagdict = load(dictpkl)
+        if tagdict == None:
+            tagdict = {}
         taggingInfo_dict = parse_tagging_info(buf["TaggingInfo"][0][0])
-    
+        
+        tagdict.update({filename:taggingInfo_dict})
+        save(tagdict,dictpkl,clobber=True)
+        
         # Loop through the tagging info to identify the time window of relevance 
         #  in order to see if we can truncate the data for storage 
         interval_starts = []
@@ -292,12 +298,25 @@ class ElectricTimeStream:
         
     def ExtractComponents(self):
         
-     
-        LF1I = np.array(self.dfl1.loc[:,['i0','i1','i2','i3','i4','i5']],dtype="complex64")
-        LF1V = np.array(self.dfl1.loc[:,['v0','v1','v2','v3','v4','v5']],dtype="complex64")
+        if 'i0' in self.dfl1:
+            print "You have an outdated HDF5 data file. Grab the new one from Adam when you can."
+            print "Still extracting components.."
+            LF1I = np.array(self.dfl1.loc[:,['i0','i1','i2','i3','i4','i5']],dtype="complex64")
+            LF1V = np.array(self.dfl1.loc[:,['v0','v1','v2','v3','v4','v5']],dtype="complex64")
 
-        LF2I = np.array(self.dfl2.loc[:,['i0','i1','i2','i3','i4','i5']],dtype="complex64")
-        LF2V = np.array(self.dfl2.loc[:,['v0','v1','v2','v3','v4','v5']],dtype="complex64")
+            LF2I = np.array(self.dfl2.loc[:,['i0','i1','i2','i3','i4','i5']],dtype="complex64")
+            LF2V = np.array(self.dfl2.loc[:,['v0','v1','v2','v3','v4','v5']],dtype="complex64")
+        elif 'i' in self.dfl1:
+            print "Extracting components."
+            LF1I = np.array(self.dfl1['i'])
+            LF1V = np.array(self.dfl1['v'])
+            
+            LF2I = np.array(self.dfl2['i'])
+            LF2V = np.array(self.dfl2['v'])
+            
+        else:
+            print "Malformed hdf5 file. Cannot extract data."
+            return    
         
         typelist=['real']*6 + ['imag']*6 + ['amp']*6 + ['pf']*6
         numlist =['0','1','2','3','4','5']*4
@@ -327,7 +346,7 @@ class ElectricTimeStream:
         compindex = pd.MultiIndex.from_tuples(tuples,names=['component','harmonic'])
         
         # build up multiindex data frame 
-        dfl1fullarr = np.zeros((len(self.dfl1.index),24))
+        dfl1fullarr = np.zeros((len(self.dfl1.index),24),dtype='float64')
         dfl1fullarr[:,0:6] = L1_Real
         dfl1fullarr[:,6:12] = L1_Imag
         dfl1fullarr[:,12:18] = L1_Amp
@@ -335,7 +354,7 @@ class ElectricTimeStream:
         self.l1comp = pd.DataFrame(dfl1fullarr,index = self.dfl1.index, columns = compindex)
     
     
-        dfl2fullarr = np.zeros((len(self.dfl2.index),24))
+        dfl2fullarr = np.zeros((len(self.dfl2.index),24),dtype='float64')
         dfl2fullarr[:,0:6] = L2_Real
         dfl2fullarr[:,6:12] = L2_Imag
         dfl2fullarr[:,12:18] = L2_Amp
