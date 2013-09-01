@@ -302,7 +302,9 @@ class ElectricTimeStream:
     
     To extract the real, imaginary, amplitude, and pf components, run
     ExtractComponents(). This will create two new data frames, self.l1 and
-    self.l2, which contain these components. You can index them as follows:
+    self.l2, which contain these components. 
+    
+    You can index the various data frames as follows:
     
     import ApplianceFeatures as ap
     # Read in Electric Time Stream
@@ -404,7 +406,12 @@ class ElectricTimeStream:
         self.l2 = pd.DataFrame(dfl2fullarr,index = self.dfl2.index, columns = compindex)
         
         
-    def Truncate(self,newstart,newstop):
+    def TruncateToWindow(self,newstart,newstop):
+        '''
+        This will take all the dataframes for an instance of ElectricTimeStream 
+        and overwrite them with a truncated dataframe beginning at newstart
+        and ending at newstop.
+        '''
         newstart = pd.to_datetime(newstart)
         newstop = pd.to_datetime(newstop)
         dflist = ['dfl1','dfl2','dfhf','l1','l2']
@@ -422,9 +429,34 @@ class ElectricTimeStream:
 class Appliance(ElectricTimeStream): 
     '''
     Appliance class, a subclass of the ElectricTimeStream.  Given the ID (row) 
-    number of the tagged instance in the eventtimes.csv file, it will identify 
-    the hdf5file containing the data for this appliance, load it, truncate it 
-    down to its start/stop times, and then extract its components."
+    number of the tagged instance in the eventtimes.csv file, it will 
+    * Identify the hdf5file containing the data for this appliance 
+    * Load the hdf5file into pandas dataframes 
+    * Truncate the data file to 10 minutes before the start time of the event
+      and 10 minutes after the end time of the event
+    * Extract the components (real, imag, amp, pf) from the data frame
+    * Create pointers to windows of interest for each of the 5 data frames: 
+        *_event (event itself), *_pre (2 min prior), *_post (2 min after)
+    
+    Overview of data frames:
+    dfhf: 4096xN spectrogram of high frequency noise. 
+    dfl1: Hierarchical data frame containing complex voltage and current for Phase 1
+      dfl1['v']: Fundamental ['0'] and first 5 harmonics of 60Hz voltage
+      dfl1['i']: Fundamental ['0'] and first 5 harmonics of 60Hz current 
+    dfl2: Hierarchical data frame containing complex voltage and current for Phase 1
+      dfl2['v']: Fundamental ['0'] and first 5 harmonics of 60Hz voltage
+      dfl2['i']: Fundamental ['0'] and first 5 harmonics of 60Hz current 
+    l1: Extracted components for phase 1
+      l1['real'], l1['imag'], l1['amp'], l1['pf'] - each 6xN
+    l2: Extracted components for phase 2
+      l2['real'], l2['imag'], l2['amp'], l2['pf'] - each 6xN
+    
+    For each of the data frames (using l1 as an example):
+    l1: contains full data frame from 10 min before to 10 min after the event
+    l1_event: contains the data frame from start_event to stop_event
+    l1_pre: contains the data frame from 2 min before start_event to start_event
+    l1_post: contains the data frame from stop_event to 2 min after stop_event
+    
     
     Sample Usage:
     
@@ -450,6 +482,8 @@ class Appliance(ElectricTimeStream):
     In [244]: app.l1.real['0'].plot() # plot 0th component of the real timestream for l1
     Out[244]: <matplotlib.axes.AxesSubplot at 0x1ae45ef0>
     
+    
+    
     '''
     def __init__(self,eventid):    
         # load the times for each training file
@@ -457,26 +491,58 @@ class Appliance(ElectricTimeStream):
         # load the start and stop times for each training event
         eventdf = pd.read_csv('data/eventtimes.csv')
 
-        # find the hdf5 file that contains the training event
-        self.start = pd.to_datetime(eventdf.loc[eventid]['start'],unit='s')
-        self.stop = pd.to_datetime(eventdf.loc[eventid]['stop'],unit='s')
+        # Grab info from the event csv file
         self.house = eventdf.loc[eventid]['house']
         self.name = eventdf.loc[eventid]['name']
         
-        row = filedf.loc[(filedf.filestart < self.start) & (filedf.filestop > self.stop)]
+        
+        # define the start and stop times of the event
+        self.start_event = pd.to_datetime(eventdf.loc[eventid]['start'],unit='s')
+        self.stop_event = pd.to_datetime(eventdf.loc[eventid]['stop'],unit='s')
+        # Add a 10 minute buffer to each end for truncation 
+        self.start_window = pd.to_datetime(pd.to_datetime(eventdf.loc[eventid]['start'],unit='s')-timedelta(minutes=10))
+        self.stop_window = pd.to_datetime(pd.to_datetime(eventdf.loc[eventid]['stop'],unit='s')+timedelta(minutes=10))
+
+        ## Find the hdf5 file that contains the training event ##
+        row = filedf.loc[(filedf.filestart < self.start_event) & (filedf.filestop > self.stop_event)]
         if len(row) == 0:
             print "Could not find this training event in a datafile time window!"
         elif len(row) > 1:
             print "Found this training event in multiple datafile time windows; something is wrong"
         else:
+            # load up the hdf5 file containing the data
             self.hdf5file = row.loc[:,'filename'].values[0]
             self._loadHDF5()
-            self.Truncate(self.start,self.stop)
+            # Truncate the data to a 10 minute window around the event
+            self.TruncateToWindow(self.start_window,self.stop_window)
             self.ExtractComponents()
-            print "Finished loading the instance of {} for house {} starting at {}.".format(self.name,self.house,self.start)
-        
+            
+            # Create the pointers to the various time windows. Pre-event, event, post-event
+            attrlist = ['dfl1','dfl2','dfhf','l1','l2']
+            for attr in attrlist:
+                pre, post, curr = [attr+'_pre',attr+'_post',attr+'_event']
+                full_df = getattr(self,attr)
+                # event dataframe contains the window specified by start_event & stop_event
+                curr_df = full_df.loc[(full_df.index >= self.start_event) & (full_df.index <= self.stop_event)]
+                setattr(self,curr,curr_df)
+                
+                # set the window to 2 minutes before and 2 minutes after
+                pre_time = (pd.to_datetime(self.start_event-timedelta(minutes=2)))
+                post_time = (pd.to_datetime(self.stop_event+timedelta(minutes=2)))
+                pre_df =  full_df.loc[(full_df.index > pre_time) & (full_df.index < self.start_event)]
+                post_df =  full_df.loc[(full_df.index > self.stop_event) & (full_df.index < post_time)]                
+                setattr(self,pre,pre_df)
+                setattr(self,post,post_df)
+                
+                full_df = None
+                pre_df = None
+                post_df = None
+            
+            print "Finished loading the instance of {} for house {} starting at {}.".format(self.name,self.house,self.start_event)
+    
+            
     def blah(self):
-        # going to make class Appliance utilizing chris's event detection
+        # holding this code I swiped from chris for later
         raise NotImplementedError
         # plot lines showing the start/stop times
         for appliance_id in taggingInfo_dict:
