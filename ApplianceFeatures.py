@@ -174,7 +174,7 @@ def GetDataFrames(filename,clobber=False,save_all=False):
         if not os.path.exists(outh5):
             print "Saved data does not exist for {}: Converting from matlab binary".format(outh5)
         elif clobber:
-            print "Saved data already exists for {} but clobber == True; overwriting".format(ou5h5)
+            print "Saved data already exists for {} but clobber == True; overwriting".format(outh5)
         buf = io.loadmat(filename)['Buffer']
     else:
         print "Saved data for {} already exists.\n>Loading {}".format(filename,outh5)
