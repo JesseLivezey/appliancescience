@@ -417,25 +417,46 @@ class ElectricTimeStream:
                 print "Truncated {}.".format(att)
                 truncated_df = None
             except:
-                print "Instance of this object does not have {}. Not Truncating it.".format(att)
+                print "Instance of this object does not (yet) have {}. Not Truncating it.".format(att)
 
-class Appliance(ElectricTimeStream): #make as a sub class of ElectricTimeStream?
+class Appliance(ElectricTimeStream): 
+    '''
+    Appliance class, a subclass of the ElectricTimeStream.  Given the ID (row) 
+    number of the tagged instance in the eventtimes.csv file, it will identify 
+    the hdf5file containing the data for this appliance, load it, truncate it 
+    down to its start/stop times, and then extract its components."
+    
+    Sample Usage:
+    
+    In [239]: import ApplianceFeatures as af
+
+    In [240]: app=af.Appliance(3)
+    Loaded data/hdf5storage/H1_04-13.h5
+    Truncating data frames to new window: [2012-04-13 22:24:26.990000,2012-04-13 22:26:34.870000]
+    Truncated dfl1.
+    Truncated dfl2.
+    Truncated dfhf.
+    Instance of this object does not have l1. Not Truncating it.
+    Instance of this object does not have l2. Not Truncating it.
+    Extracting components.
+    Finished loading the instance of Washer for house H1 starting at 2012-04-13 22:24:26.990000.
+
+    In [242]: app.house
+    Out[242]: 'H1'
+
+    In [243]: app.name
+    Out[243]: 'Washer'
+
+    In [244]: app.l1.real['0'].plot() # plot 0th component of the real timestream for l1
+    Out[244]: <matplotlib.axes.AxesSubplot at 0x1ae45ef0>
+    
+    '''
     def __init__(self,eventid):    
         # load the times for each training file
         filedf = pd.read_csv('data/filetimes.csv',parse_dates=['filestart','filestop'],index_col=0)
         # load the start and stop times for each training event
         eventdf = pd.read_csv('data/eventtimes.csv')
-        # Doing this to convert the integer time to timestamps.. probably a better way
-        # stopstamps = pd.to_datetime(eventdf.loc[:,'stop'],unit='s')
-        # startstamps = pd.to_datetime(eventdf.loc[:,'start'],unit='s')
-        # self.eventdf = pd.DataFrame({
-        #     'house':eventdf.house,
-        #     'id':eventdf.id,
-        #     'name':eventdf.name,
-        #     'start':startstamps,
-        #     'stop':stopstamps
-        #     })        
-            
+
         # find the hdf5 file that contains the training event
         self.start = pd.to_datetime(eventdf.loc[eventid]['start'],unit='s')
         self.stop = pd.to_datetime(eventdf.loc[eventid]['stop'],unit='s')
