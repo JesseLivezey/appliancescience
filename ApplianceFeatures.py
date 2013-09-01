@@ -301,8 +301,8 @@ class ElectricTimeStream:
     the high frequency information, stored in self.dfhf.
     
     To extract the real, imaginary, amplitude, and pf components, run
-    ExtractComponents(). This will create two new data frames, self.l1comp and
-    self.l2comp, which contain these components. You can index them as follows:
+    ExtractComponents(). This will create two new data frames, self.l1 and
+    self.l2, which contain these components. You can index them as follows:
     
     import ApplianceFeatures as ap
     # Read in Electric Time Stream
@@ -312,23 +312,33 @@ class ElectricTimeStream:
     ts.ExtractComponents()
     
     # Get the timeseries of the 6 real components from channel l1:
-    ts.l1comp['real']  # or ts.l1comp.real
+    ts.l1['real']  # or ts.l1.real
     
     # Get the timeseries of the 3rd imaginary component from l2:
-    ts.l2comp['imag']['2']
+    ts.l2['imag']['2']
     
     # Get the timeseries of the real components between 9:30 and 9:48 pm
-    subts = ts.l1comp['real'].loc[(ts.l1comp.index > "2012-10-22 21:30:00") & (ts.l1comp.index < "2012-10-22 21:48:00")]
+    subts = ts.l1['real'].loc[(ts.l1.index > "2012-10-22 21:30:00") & (ts.l1.index < "2012-10-22 21:48:00")]
     
     # plot all of the components of a data frame
     subts.plot()
     
     '''
-    def __init__(self,hdf5file):
-        dfL1, dfL2, dfHF = LoadHDF5(hdf5file)
-        self.dfl1 = dfL1
-        self.dfl2 = dfL2
-        self.dfhf = dfHF
+    def __init__(self,hdf5file=None):
+        self.hdf5file = hdf5file
+    
+    def _loadHDF5(self):
+        if self.hdf5file == None:
+            print "Need to assign location of self.hdf5 to load it."
+        elif not os.path.exists(self.hdf5file):
+            print "Path to hdf5 file {} does not exist. Not loading.".format({self.hdf5file})
+        else:
+            dfL1, dfL2, dfHF = LoadHDF5(self.hdf5file)
+            self.dfl1 = dfL1
+            self.dfl2 = dfL2
+            self.dfhf = dfHF
+            print "Loaded {}".format(self.hdf5file)
+
         
     def ExtractComponents(self):
         
@@ -384,18 +394,67 @@ class ElectricTimeStream:
         dfl1fullarr[:,6:12] = L1_Imag
         dfl1fullarr[:,12:18] = L1_Amp
         dfl1fullarr[:,18:24] = L1_Pf
-        self.l1comp = pd.DataFrame(dfl1fullarr,index = self.dfl1.index, columns = compindex)
+        self.l1 = pd.DataFrame(dfl1fullarr,index = self.dfl1.index, columns = compindex)
       
         dfl2fullarr = np.zeros((len(self.dfl2.index),24),dtype='float64')
         dfl2fullarr[:,0:6] = L2_Real
         dfl2fullarr[:,6:12] = L2_Imag
         dfl2fullarr[:,12:18] = L2_Amp
         dfl2fullarr[:,18:24] = L2_Pf
-        self.l2comp = pd.DataFrame(dfl2fullarr,index = self.dfl2.index, columns = compindex)
-                
+        self.l2 = pd.DataFrame(dfl2fullarr,index = self.dfl2.index, columns = compindex)
         
-class Appliance: #make as a sub class of ElectricTimeStream?
-    def __init__(self,applianceid):    
+        
+    def Truncate(self,newstart,newstop):
+        newstart = pd.to_datetime(newstart)
+        newstop = pd.to_datetime(newstop)
+        dflist = ['dfl1','dfl2','dfhf','l1','l2']
+        print "Truncating data frames to new window: [{},{}]".format(newstart,newstop)
+        for att in dflist:
+            try:
+                truncated_df = getattr(self,att)
+                truncated_df = truncated_df.loc[(truncated_df.index >= newstart) & (truncated_df.index <= newstop)]
+                setattr(self,att,truncated_df)
+                print "Truncated {}.".format(att)
+                truncated_df = None
+            except:
+                print "Instance of this object does not have {}. Not Truncating it.".format(att)
+
+class Appliance(ElectricTimeStream): #make as a sub class of ElectricTimeStream?
+    def __init__(self,eventid):    
+        # load the times for each training file
+        filedf = pd.read_csv('data/filetimes.csv',parse_dates=['filestart','filestop'],index_col=0)
+        # load the start and stop times for each training event
+        eventdf = pd.read_csv('data/eventtimes.csv')
+        # Doing this to convert the integer time to timestamps.. probably a better way
+        # stopstamps = pd.to_datetime(eventdf.loc[:,'stop'],unit='s')
+        # startstamps = pd.to_datetime(eventdf.loc[:,'start'],unit='s')
+        # self.eventdf = pd.DataFrame({
+        #     'house':eventdf.house,
+        #     'id':eventdf.id,
+        #     'name':eventdf.name,
+        #     'start':startstamps,
+        #     'stop':stopstamps
+        #     })        
+            
+        # find the hdf5 file that contains the training event
+        self.start = pd.to_datetime(eventdf.loc[eventid]['start'],unit='s')
+        self.stop = pd.to_datetime(eventdf.loc[eventid]['stop'],unit='s')
+        self.house = eventdf.loc[eventid]['house']
+        self.name = eventdf.loc[eventid]['name']
+        
+        row = filedf.loc[(filedf.filestart < self.start) & (filedf.filestop > self.stop)]
+        if len(row) == 0:
+            print "Could not find this training event in a datafile time window!"
+        elif len(row) > 1:
+            print "Found this training event in multiple datafile time windows; something is wrong"
+        else:
+            self.hdf5file = row.loc[:,'filename'].values[0]
+            self._loadHDF5()
+            self.Truncate(self.start,self.stop)
+            self.ExtractComponents()
+            print "Finished loading the instance of {} for house {} starting at {}.".format(self.name,self.house,self.start)
+        
+    def blah(self):
         # going to make class Appliance utilizing chris's event detection
         raise NotImplementedError
         # plot lines showing the start/stop times
@@ -572,6 +631,7 @@ def load(pklpath):
         return None
 
 def save(input,outpath,clobber=False):
+    "Save an object as a pickle file."
     path_existed = os.path.exists(outpath)
     if path_existed and not clobber:
         print '%s already exists and clobber == False; not overwriting.' % (outpath)
