@@ -497,6 +497,7 @@ class Appliance(ElectricTimeStream):
         # Grab info from the event csv file
         self.house = eventdf.loc[eventid]['house']
         self.name = eventdf.loc[eventid]['name']
+        self.id = eventdf.loc[eventid]['id']
         
         
         # define the start and stop times of the event
