@@ -493,7 +493,8 @@ class Appliance(ElectricTimeStream):
         filedf = pd.read_csv('data/filetimes.csv',parse_dates=['filestart','filestop'],index_col=0)
         # load the start and stop times for each training event
         eventdf = pd.read_csv('data/eventtimes.csv')
-
+        
+        self.eventid = eventid
         # Grab info from the event csv file
         self.house = eventdf.loc[eventid]['house']
         self.name = eventdf.loc[eventid]['name']
@@ -508,10 +509,11 @@ class Appliance(ElectricTimeStream):
 
         ## Find the hdf5 file that contains the training event ##
         row = filedf.loc[(filedf.filestart < self.start_event) & (filedf.filestop > self.stop_event)]
+        raise Exception
         if len(row) == 0:
-            print "Could not find this training event in a datafile time window!"
+            raise IOError("Could not find this training event in a datafile time window!")
         elif len(row) > 1:
-            print "Found this training event in multiple datafile time windows; something is wrong"
+            raise IOError("Found this training event in multiple datafile time windows; something is wrong")
         else:
             # load up the hdf5 file containing the data
             self.hdf5file = row.loc[:,'filename'].values[0]
@@ -567,6 +569,46 @@ class Appliance(ElectricTimeStream):
         "diff":spec_avg_on-spec_avg_off
         })
         
+
+    def NaiiveFindPeaks(self,plot=False):
+        ''' Very simple code to find spectral peaks in the high frequency noise.
+        To be found as a peak, a abs(value) simply needs to be larger than the two
+        abs(values) preceeding it and the two abs(values) after it, and have an 
+        abs(value) > 15.
+        
+        Peaks are stored as (index,value) tuples in the attribute spectral_peaks
+        '''
+        count = 2
+        self.spectral_peaks = []
+        
+        if not hasattr(self,'avg_spectrum'):
+            print "Must run _averageSpectra() first."
+            return None
+        spec = self.avg_spectrum.loc[:,'diff']
+        if plot == True:
+            self.avg_spectrum.plot()
+        
+        for value in spec.iloc[2:-2]:
+            if (abs(value) > abs(spec.iloc[count-1])) and \
+                    (abs(value) > abs(spec.iloc[count+1])) and \
+                    (abs(value) > abs(spec.iloc[count+2])) and \
+                    (abs(value) > abs(spec.iloc[count-2])) and \
+                    (abs(value) > 15):
+                self.spectral_peaks.append((count,value))
+                if plot == True:
+                    plt.vlines(count,-10,0)
+                    plt.annotate(' ' + str(count),(count,max([value,0])),xycoords='data',\
+                                    xytext=(count, max([(value+15.0),15])), textcoords='data',\
+                                    arrowprops=dict(width=1,headwidth=5,facecolor='black', frac=0.2, shrink=0.05),\
+                                    horizontalalignment='left',\
+                                    verticalalignment='bottom',\
+                                    clip_on=True,rotation=90)
+            count += 1
+        if plot == True:
+            title = str(self.eventid) + '_' + self.house + '_' + self.name
+            plt.title(title.replace('_',' '))
+            plt.savefig('plots/Spectral_plots/spec' + title + '.png')
+            plt.clf()
         
     def blah(self):
         # holding this code I swiped from chris for later
@@ -674,16 +716,16 @@ class Appliance(ElectricTimeStream):
 
     
 def LoopThruAllAppliances():
-    '''Example of how to loop through every training appliance, do stuff to it,
-    and save the result as a list of all appliance objects.
+    '''
+    Example of how to loop through every training appliance & do stuff
     '''
     eventdf = pd.read_csv('data/eventtimes.csv')
-    app_object_list = []
-    for ind in eventdf.index:
+    # app_object_list = []
+    for ind in eventdf.index[180:]:
         app = Appliance(ind)
-        # do stuff
-        app_object_list.append(app)
-    return app_object_list
+        app.NaiivefindPeaks(plot=True)
+        # app_object_list.append(app)
+    # return app_object_list
         
     
     
