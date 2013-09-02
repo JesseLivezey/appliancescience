@@ -343,17 +343,21 @@ class ElectricTimeStream:
 
         
     def ExtractComponents(self):
+        '''
+        Extract the real, imaginary, amplitude, and power factors from the 
+        complex voltage and current data for the l1 and l2 phases. 
+        '''
         
         if 'i0' in self.dfl1:
-            print "You have an outdated HDF5 data file. Grab the new one from Adam when you can."
-            print "Still extracting components.."
+            print "WARNING: You have an outdated HDF5 data file. Grab the new one from Adam when you can."
+            print "Still going to extract components.."
             LF1I = np.array(self.dfl1.loc[:,['i0','i1','i2','i3','i4','i5']],dtype="complex64")
             LF1V = np.array(self.dfl1.loc[:,['v0','v1','v2','v3','v4','v5']],dtype="complex64")
 
             LF2I = np.array(self.dfl2.loc[:,['i0','i1','i2','i3','i4','i5']],dtype="complex64")
             LF2V = np.array(self.dfl2.loc[:,['v0','v1','v2','v3','v4','v5']],dtype="complex64")
         elif 'i' in self.dfl1:
-            print "Extracting components."
+            print "Extracting components..."
             LF1I = np.array(self.dfl1['i'])
             LF1V = np.array(self.dfl1['v'])
             
@@ -361,10 +365,9 @@ class ElectricTimeStream:
             LF2V = np.array(self.dfl2['v'])
             
         else:
-            print "Malformed hdf5 file. Cannot extract data."
+            print "ERROR: Malformed hdf5 file. Cannot extract data."
             return    
         
-
         # Calculate power (by convolution)
         L1_P = LF1V * LF1I.conjugate()      # Nx6, N is number of time steps
         L2_P = LF2V * LF2I.conjugate()
@@ -406,7 +409,7 @@ class ElectricTimeStream:
         self.l2 = pd.DataFrame(dfl2fullarr,index = self.dfl2.index, columns = compindex)
         
         
-    def TruncateToWindow(self,newstart,newstop):
+    def TruncateToWindow(self,newstart,newstop,verbose=False):
         '''
         This will take all the dataframes for an instance of ElectricTimeStream 
         and overwrite them with a truncated dataframe beginning at newstart
@@ -421,10 +424,11 @@ class ElectricTimeStream:
                 truncated_df = getattr(self,att)
                 truncated_df = truncated_df.loc[(truncated_df.index >= newstart) & (truncated_df.index <= newstop)]
                 setattr(self,att,truncated_df)
-                print "Truncated {}.".format(att)
+                if verbose: print "Truncated {}.".format(att)
                 truncated_df = None
             except:
-                print "Instance of this object does not (yet) have {}. Not Truncating it.".format(att)
+                if verbose:
+                    print "Instance of this object does not (yet) have {}. Not Truncating it.".format(att)
 
 class Appliance(ElectricTimeStream): 
     '''
@@ -538,9 +542,33 @@ class Appliance(ElectricTimeStream):
                 pre_df = None
                 post_df = None
             
-            print "Finished loading the instance of {} for house {} starting at {}.".format(self.name,self.house,self.start_event)
-    
+            print "Averaging spectra..."
+            self._averageSpectra()
             
+            print "Finished creating the instance of {} for house {} starting at {}.".format(self.name,self.house,self.start_event)
+    
+    def _averageSpectra(self):
+        '''Get the average over time of the HF spectrum
+        
+        Result is a 3 column x 4096 row data frame "self.avg_spectrum" which 
+        contains the columns:
+           on: average value of the spectrum when the device from start_event to stop_event
+           off: average value of the spectrum of the two minutes prior to start_event
+                and two minutes after stop_event
+           diff: difference between the on and off spectra.  
+        
+        '''
+        spec_avg_on = 1.0*self.dfhf_event.sum(axis=0)/len(self.dfhf_event)
+        spec_avg_off = (1.0*(self.dfhf_pre.sum(axis=0) 
+            + self.dfhf_post.sum(axis=0)))/(len(self.dfhf_pre) + len(self.dfhf_post))
+        spec_diff = spec_avg_on - spec_avg_off
+        self.avg_spectrum = pd.DataFrame({
+        "on":spec_avg_on,
+        "off":spec_avg_off,
+        "diff":spec_avg_on-spec_avg_off
+        })
+        
+        
     def blah(self):
         # holding this code I swiped from chris for later
         raise NotImplementedError
