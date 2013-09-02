@@ -19,10 +19,10 @@ for datafilename in file_list:
     a.ExtractComponents()
 
     # Trim to specified time range. Can take date-time object or strings
-    # a_trimmed = a.l1comp.amp["0"][(a.l1comp.index>"2012-04-13 22:04:51.253961") &(a.l1comp.index<"2012-04-13 22:05:51.253961")]
+    # a_trimmed = a.l1.amp["0"][(a.l1.index>"2012-04-13 22:04:51.253961") &(a.l1.index<"2012-04-13 22:05:51.253961")]
 
-    L1_Amp = a.l1comp.amp.sum(axis=1)
-    L2_Amp = a.l2comp.amp.sum(axis=1)
+    L1_Amp = a.l1.amp.sum(axis=1)
+    L2_Amp = a.l2.amp.sum(axis=1)
 
     L1_time_length = (L1_Amp.index[-1] - L1_Amp.index[0]).total_seconds()
     L2_time_length = (L2_Amp.index[-1] - L2_Amp.index[0]).total_seconds()
