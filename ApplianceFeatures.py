@@ -68,14 +68,14 @@ def _updateFileTimes():
     
 def _updateEventTimes():
     '''
-    Grab the start/stop times of each training event from allevents.csv;
+    Grab the start/stop times of each training event from eventtimes.csv;
     Store as a pandas dataframe, and store it in the tagging.h5 file
     
     No longer implemented. the hdf5 files were too large. just sticking with csv.
     
     '''
     raise NotImplementedError
-    eventdf=pd.read_csv("data/allevents.csv",skiprows=4,names=['house','id','name','start','stop'])
+    eventdf=pd.read_csv("data/eventtimes.csv",skiprows=4,names=['house','id','name','start','stop'])
     outh5 = "data/tagging.h5"
     print "Saving data frames to hdf5: {}".format(outh5)
     store = pd.HDFStore(outh5)
@@ -328,6 +328,7 @@ class ElectricTimeStream:
     '''
     def __init__(self,hdf5file=None):
         self.hdf5file = hdf5file
+        self._loadHDF5()
     
     def _loadHDF5(self):
         if self.hdf5file == None:
@@ -485,8 +486,6 @@ class Appliance(ElectricTimeStream):
 
     In [244]: app.l1.real['0'].plot() # plot 0th component of the real timestream for l1
     Out[244]: <matplotlib.axes.AxesSubplot at 0x1ae45ef0>
-    
-    
     
     '''
     def __init__(self,eventid):    
@@ -648,40 +647,6 @@ class Appliance(ElectricTimeStream):
                 on_average_spectrum = HF[:,HF_end_index-int(round(num_HF_timestamps/4.)):HF_end_index].sum(axis=1) / float(HF[:,HF_end_index-int(round(num_HF_timestamps/4.)):HF_end_index].shape[1])
                 diff_spectrum = on_average_spectrum - off_average_spectrum
             
-                df_spec = pd.DataFrame({
-                "off":off_average_spectrum,
-                "on":on_average_spectrum,
-                "diff":on_average_spectrum-off_average_spectrum 
-                })
-
-                dfL1 = pd.DataFrame({
-                "real":L1_Real_window,
-                "imag":L1_Imag_window,
-                "amp":L1_Amp_window,
-                "pf0":L1_Pf_window[:,0],
-                "pf1":L1_Pf_window[:,1],
-                "pf2":L1_Pf_window[:,2],
-                "pf3":L1_Pf_window[:,3],
-                "pf4":L1_Pf_window[:,4],
-                "pf5":L1_Pf_window[:,5]
-                }, index = L1_TimeTicks_window_shifted
-                )
-            
-                dfL2 = pd.DataFrame({
-                "real":L2_Real_window,
-                "imag":L2_Imag_window,
-                "amp":L2_Amp_window,
-                "pf0":L2_Pf_window[:,0],
-                "pf1":L2_Pf_window[:,1],
-                "pf2":L2_Pf_window[:,2],
-                "pf3":L2_Pf_window[:,3],
-                "pf4":L2_Pf_window[:,4],
-                "pf5":L2_Pf_window[:,5]
-                }, index = L2_TimeTicks_window_shifted
-                )
-            
-                dfL2.real.plot()
-                dfL1.real.loc[(dfL2.index < 1334358010) & (dfL2.index > 1334354690)].plot()
 
                 L1_L2_plot_data = ((L1_TimeTicks_window_shifted, L1_Real_window),
                                    (L1_TimeTicks_window_shifted, L1_Imag_window),
@@ -707,6 +672,19 @@ class Appliance(ElectricTimeStream):
                     "L2_Pf0", "L2_Pf1", "L2_Pf2", "L2_Pf3", "L2_Pf4", "L2_Pf5")
 
 
+    
+def LoopThruAllAppliances():
+    '''Example of how to loop through every training appliance, do stuff to it,
+    and save the result as a list of all appliance objects.
+    '''
+    eventdf = pd.read_csv('data/eventtimes.csv')
+    app_object_list = []
+    for ind in eventdf.index:
+        app = Appliance(ind)
+        # do stuff
+        app_object_list.append(app)
+    return app_object_list
+        
     
     
 def parse_tagging_info(tagging_info_buffer):
