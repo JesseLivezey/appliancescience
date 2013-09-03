@@ -721,6 +721,18 @@ class Appliance(ElectricTimeStream):
                     "L2_Pf0", "L2_Pf1", "L2_Pf2", "L2_Pf3", "L2_Pf4", "L2_Pf5")
 
 
+
+def SaveSpectralTemplates():
+    '''
+    Example of how to loop through every training appliance & do stuff
+    '''
+    eventdf = pd.read_csv('data/eventtimes.csv')
+    new_df=pd.DataFrame(index=eventdf.index,columns=np.arange(4096))
+    for ind in eventdf.index:
+        app = Appliance(ind)
+        new_df.loc[ind] = ZeroTheNegatives(app.avg_spectrum['diff_smoothed'])
+        # app_object_list.append(app)
+    return new_df
     
 def LoopThruAllAppliances():
     '''
