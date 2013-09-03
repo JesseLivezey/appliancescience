@@ -4,6 +4,8 @@ from scipy import io
 from cmath import phase
 import sys
 
+import pandas as pd
+
 from matplotlib.pylab import *
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
@@ -75,6 +77,51 @@ def merge_jumps_together(jump_interval_indices):
     return trimmed_merged_jumps
 
 
+
+
+
+def combine_jumps_together_smarter(jumps, time_ticks, smooth_vals):
+    # main df
+    start_loc_list = []
+    stop_loc_list = []
+    values_list = []
+    for jump in jumps:
+        start_loc_list.append(jump[0][0])
+        stop_loc_list.append(jump[0][1])
+        values_list.append(jump[1][0])
+    adf=pd.DataFrame({"start":start_loc_list,"stop":stop_loc_list,"values":values_list})
+    # make blank output df
+    new_df=pd.DataFrame(columns=["start","stop","values","count","sum"])
+    # loop through and search
+    columns=['start','stop','values']
+
+    thresh = 30 # between the end of one window and the beginning of the next to be considered the same
+    for index,row in adf.iterrows():
+        found_neighbor = new_df.loc[(new_df.start < row['start']) & (new_df.stop + thresh > row['start'])]
+        if len(found_neighbor) == 1:
+            # print "found a neighbor"
+            intind = int(found_neighbor.index)
+            new_df.loc[intind]['stop'] = max(row['stop'],found_neighbor['stop'])
+            new_df.loc[intind]['sum'] = row['values'] + new_df.loc[intind]['sum']
+            new_df.loc[intind]['count'] += 1
+            new_df.loc[intind]['values'] = new_df.loc[intind]['sum']/new_df.loc[intind]['count']
+        elif len(found_neighbor) == 0:
+            # print "adding new row"
+            new_df = new_df.append(row.append(pd.Series({"sum":row['values'],"count":1})),ignore_index=True)
+            row.append
+        else:
+            print "We have a problem. (In combined_jumps_together_smarter)"
+    combined_jumps = []
+    for entry in new_df.values:
+        jump_interval = [entry[0], entry[1]]
+        jump_height, jump_std = measure_jump(smooth_vals, jump_interval[0], loc_end=jump_interval[-1]-jump_interval[0], search_width=1.5, jump_buffer=5)
+        if abs(jump_height) > 3*jump_std:
+            combined_jumps.append([(jump_interval[0], jump_interval[-1]), (jump_height, jump_std), (time_ticks[jump_interval[0]], time_ticks[jump_interval[-1]])])
+    return combined_jumps
+    
+    
+    
+
 def combine_jumps_together(jumps, time_ticks, smooth_vals):    
     # Combine jumps with large std into jumps with start and stop times
     jump_interval_indices = []
@@ -87,6 +134,16 @@ def combine_jumps_together(jumps, time_ticks, smooth_vals):
             jump_interval_indices.append(current_jump_interval)
             current_jump_interval = set()
             # print "a, clean jump", jumps[n][0][0], jumps[n][0][1]
+        elif (n<len(jumps)-1) and (jumps[n+1][0][0] - jumps[n][0][1]) > 30:
+            current_jump_interval = current_jump_interval.union({jumps[n][0][0]})
+            current_jump_interval = current_jump_interval.union({jumps[n][0][1]})
+            jump_interval_indices.append(current_jump_interval)
+            current_jump_interval = set()
+        elif (n>0) and (jumps[n][0][0] - jumps[n-1][0][1]) > 30:
+            current_jump_interval = current_jump_interval.union({jumps[n][0][0]})
+            current_jump_interval = current_jump_interval.union({jumps[n][0][1]})
+            jump_interval_indices.append(current_jump_interval)
+            current_jump_interval = set()
         elif (n>0) and (n<len(jumps)-1) and (jumps[n][0][0] - jumps[n-1][0][1] < jumps[n+1][0][0] - jumps[n][0][1]) and len(jump_interval_indices)>0:
             jump_interval_indices[-1] = jump_interval_indices[-1].union(current_jump_interval, {jumps[n][0][0], jumps[n][0][1]})
             current_jump_interval = set()
@@ -145,41 +202,13 @@ def test_jumps_cleanliness(jumps):
     for jump in jumps:
         if abs(jump[1][0]) < 5*jump[1][1]:
             return False, False
+    for n in range(len(jumps)):
+        if (n<len(jumps)-1) and (jumps[n+1][0][0] - jumps[n][0][1]) > 30:
+            return False, False
+        if (n>0) and (jumps[n][0][0] - jumps[n-1][0][1]) > 30:
+            return False, False
     else:
         return True, False
-
-def extract_event_value(stream_time_ticks, stream):
-# L1 and L2 data is collected at a rate of 6.0064028254118895 times per second
-# HF spectra data is collected at a rate of 0.9375005859378663 times per second
-    median_stream = ndimage.filters.median_filter(stream, 6.0064028254118895) # smooth with width 1 second of data
-    smooth_stream = ndimage.filters.gaussian_filter1d(median_stream, 1.0) # smooth
-    stream_gradient = np.gradient(smooth_stream)
-    peak_locs = signal.find_peaks_cwt(abs(stream_gradient), np.array([1]), min_snr=1)
-    clipped_stream_gradient, stream_gradient_median, std_around_zero = mad_clipping(stream_gradient, 3)
-    vetted_peak_locs = list(np.where(abs(stream_gradient[peak_locs]) > 5*std_around_zero)[0])
-    if len(vetted_peak_locs) > 1:
-        peak_indices = list(np.array(peak_locs)[vetted_peak_locs])
-        peak_times = stream_time_ticks[peak_indices]
-        peak_data = stream_gradient[peak_indices]
-        precise_event_start_timestamp = peak_times.min()
-        precise_event_end_timestamp = peak_times.max()
-        buffer_time = 0.5
-        before_stream = stream[stream_time_ticks<(precise_event_start_timestamp-buffer_time)]
-        during_stream = stream[(stream_time_ticks>(precise_event_start_timestamp+buffer_time)) & (stream_time_ticks<(precise_event_end_timestamp-buffer_time))]
-        after_stream = stream[stream_time_ticks>(precise_event_end_timestamp+buffer_time)]
-        baseline_std = ((before_stream.std())**2 + (after_stream.std())**2)**0.5
-        if not (abs(median(before_stream) - median(after_stream)) < 2*baseline_std):
-            # print "OMG, before_stream and after_stream indicate a baseline that changes during the event. Abort!!!"
-            return None, None
-        else:
-            baseline_value = (median(before_stream) + median(after_stream))/2.0
-            cropped_during_stream, event_value, event_std = mad_clipping(during_stream, 3)
-            event_difference = event_value - baseline_value
-            event_different_std = ((baseline_std)**2 + (event_std)**2)**0.5
-            return event_difference, event_different_std
-    else:
-        # print "OMG, there were not at least 2 detected jumps in the stream, so no event can be measured."
-        return None, None
 
 
 
@@ -208,9 +237,9 @@ def event_detector2(time_ticks, vals):
             jumps.append([[loc, loc], (jump_height, jump_std), (time_ticks[loc], time_ticks[loc])])
     try:
         if len(jumps) > 1:
-            while (jumps[0][1][0] < 0):
+            while (jumps[0][1][0] < 0) or (jumps[0][2][0] < 10):
                 jumps.pop(0)
-            while (jumps[-1][1][0] > 0):
+            while (jumps[-1][1][0] > 0) or (jumps[-1][2][0] > time_ticks[-1]-10):
                 jumps.pop(-1)
         if len(jumps) < 2:
             # print "Cleaning jumps resulted in an error, so there is probably no"
@@ -221,8 +250,6 @@ def event_detector2(time_ticks, vals):
         # print "well-detected event interval. Retruning empty list."
         return [], confidence_flag, 0.0
 
-
-
     jumps_all_clean, jumps_empty = test_jumps_cleanliness(jumps)
     n_cycles = 0
     while not jumps_all_clean:
@@ -231,6 +258,11 @@ def event_detector2(time_ticks, vals):
         n_cycles += 1
         if (jumps_empty) or (n_cycles>100):
             break
+
+
+    jumps = combine_jumps_together_smarter(jumps, time_ticks, smooth_vals)
+    
+
 
     try:
         if len(jumps) > 1:
@@ -268,7 +300,7 @@ def event_detector2(time_ticks, vals):
         for n in seq:
             net_change = running_difference[n]
             avg_height = (abs(jump_histories[n][0]) + abs(jump_histories[n][-1]))/2.0
-            if (abs(net_change) < 50) and (abs(net_change) < 0.1*avg_height) and jump_histories[n][0] > 0 and jump_histories[n][-1] < 0:
+            if (abs(net_change) < 50) and (abs(net_change) < 0.2*avg_height) and jump_histories[n][0] > 0 and jump_histories[n][-1] < 0:
                 appliance_events.append(jump_time_histories[n][0][0])
                 appliance_events.append(jump_time_histories[n][-1][-1])
                 abs_net_changes.append(abs(net_change))
@@ -276,8 +308,23 @@ def event_detector2(time_ticks, vals):
                 break
     abs_net_changes = array(abs_net_changes)
     if len(appliance_events) > 2:
-        likely_appliance_interval_num = np.where(abs_net_changes==abs_net_changes.min())[0][0]
-        appliance_events = [appliance_events[likely_appliance_interval_num*2], appliance_events[likely_appliance_interval_num*2+1]]
+        ranked_appliance_events = []
+        for n in range(len(abs_net_changes)):
+            ranked_appliance_events.append([abs_net_changes[n], appliance_events[n*2], appliance_events[n*2+1]])
+            ranked_appliance_events.sort()
+        for candidate in ranked_appliance_events:
+            trimmed_stream = vals[(time_ticks>(candidate[1]+3)) & (time_ticks<(candidate[2]-3))]        
+            clipped_stream, event_height, event_height_std = mad_clipping(trimmed_stream, 3)
+            before_stream = vals[(time_ticks>(candidate[1]-6)) & (time_ticks<(candidate[1]-3))]  
+            after_stream = vals[(time_ticks>(candidate[2]+3)) & (time_ticks<(candidate[2]+6))]  
+            event_height = event_height - ((median(before_stream) + median(after_stream))/2.)
+            event_height_std = (event_height_std**2 + (before_stream.std()**2 + after_stream.std()**2))**0.5
+            if (event_height > 0) and (event_height > 2*event_height_std):
+                appliance_events = [candidate[1], candidate[2]]
+                break
+            else:
+                continue
+        
 
     if len(appliance_events) == 0:
         abs_net_changes = []
@@ -298,16 +345,31 @@ def event_detector2(time_ticks, vals):
             for n in seq:
                 net_change = running_difference[n]
                 avg_height = (abs(jump_histories[n][0]) + abs(jump_histories[n][-1]))/2.0
-                if (abs(net_change) < 0.1*avg_height) and jump_histories[n][0] > 0 and jump_histories[n][-1] < 0:
+                if (abs(net_change) < 5) and jump_histories[n][0] > 0 and jump_histories[n][-1] < 0:
                     appliance_events.append(jump_time_histories[n][0][0])
                     appliance_events.append(jump_time_histories[n][-1][-1])
                     abs_net_changes.append(abs(net_change))
                     confidence_flag = True
                     break
-        abs_net_changes = array(abs_net_changes)
-        if len(appliance_events) > 2:
-            likely_appliance_interval_num = np.where(abs_net_changes==abs_net_changes.min())[0][0]
-            appliance_events = [appliance_events[likely_appliance_interval_num*2], appliance_events[likely_appliance_interval_num*2+1]]
+    abs_net_changes = array(abs_net_changes)
+    if len(appliance_events) > 2:
+        ranked_appliance_events = []
+        for n in range(len(abs_net_changes)):
+            ranked_appliance_events.append([abs_net_changes[n], appliance_events[n*2], appliance_events[n*2+1]])
+            ranked_appliance_events.sort()
+        for candidate in ranked_appliance_events:
+            trimmed_stream = vals[(time_ticks>(candidate[1]+3)) & (time_ticks<(candidate[2]-3))]        
+            clipped_stream, event_height, event_height_std = mad_clipping(trimmed_stream, 3)
+            before_stream = vals[(time_ticks>(candidate[1]-6)) & (time_ticks<(candidate[1]-3))]  
+            after_stream = vals[(time_ticks>(candidate[2]+3)) & (time_ticks<(candidate[2]+6))]  
+            event_height = event_height - ((median(before_stream) + median(after_stream))/2.)
+            event_height_std = (event_height_std**2 + (before_stream.std()**2 + after_stream.std()**2))**0.5
+            if (event_height > 0) and (event_height > 2*event_height_std):
+                appliance_events = [candidate[1], candidate[2]]
+                break
+            else:
+                continue
+        
     
     # If the above fails but we're pretty sure something is going on because
     # the standard deviation of the signal is large, then just define the 
@@ -329,11 +391,12 @@ def event_detector2(time_ticks, vals):
 
     
     if len(appliance_events) > 0:
-        trimmed_time_ticks = time_ticks[(time_ticks>(appliance_events[0]-3)) & (time_ticks<(appliance_events[1]+3))]
-        trimmed_stream = vals[(time_ticks>(appliance_events[0]-3)) & (time_ticks<(appliance_events[1]+3))]
-    
-        event_height, event_height_std = extract_event_value(trimmed_time_ticks, trimmed_stream)
-    
+        trimmed_stream = vals[(time_ticks>(appliance_events[0]+3)) & (time_ticks<(appliance_events[1]-3))]        
+        clipped_stream, event_height, event_height_std = mad_clipping(trimmed_stream, 3)
+        before_stream = vals[(time_ticks>(appliance_events[0]-6)) & (time_ticks<(appliance_events[0]-3))]  
+        after_stream = vals[(time_ticks>(appliance_events[1]+3)) & (time_ticks<(appliance_events[1]+6))]  
+        event_height = event_height - ((median(before_stream) + median(after_stream))/2.)
+        event_height_std = (event_height_std**2 + (before_stream.std()**2 + after_stream.std()**2))**0.5
         if (event_height < 0) or (event_height < 2*event_height_std):
             return [], False, 0.0
         else:
@@ -354,10 +417,10 @@ house_dir = sys.argv[1]
 tagged_training_filename = sys.argv[2]
 
 # This is the directory we're working with presently
-# house_dir = "data/H1/"
+# house_dir = "data/H3/"
 
 # This is the training file we're investigating
-# tagged_training_filename = "Tagged_Training_04_13_1334300401.mat"
+# tagged_training_filename = "Tagged_Training_07_30_1343631601.mat"
 
 # Read in the matlab datafile
 buf = io.loadmat(house_dir + tagged_training_filename)['Buffer']
@@ -429,14 +492,20 @@ key_array.sort()
 # sys.exit()
 
 for appliance_id in key_array:
-# for appliance_id in [16]:
+# for appliance_id in [10]:
     appliance_name = taggingInfo_dict[appliance_id]['ApplianceName'].replace("/", "")
     for interval in taggingInfo_dict[appliance_id]['OnOffSeq']:
-    # for interval in [taggingInfo_dict[appliance_id]['OnOffSeq'][0]]:
+    # for interval in [taggingInfo_dict[appliance_id]['OnOffSeq'][2]]:
         try:
             print appliance_id, appliance_name, interval
             start_time = interval[0] - 60
             end_time = interval[1] + 60
+            write_to_error = False
+            if interval[1] - interval[0] > 1000:
+                error_log_file = file("error_log.txt", "a")
+                error_log_file.write(house_dir[-3:-1] + "," + str(appliance_id) + "," + appliance_name.replace(" ", "") + "," + str(int(round((start_time + end_time)/2.0))) + "\n")
+                error_log_file.close()
+                continue
 
             a = HF_TimeTicks>=start_time
             b = HF_TimeTicks<=end_time
@@ -475,7 +544,7 @@ for appliance_id in key_array:
             L1_Amp_event_intervals, L1_Amp_confidence_flag, L1_Amp_height = event_detector2(L1_TimeTicks_window_shifted, abs(L1_P_window.sum(axis=1)))
             L2_Amp_event_intervals, L2_Amp_confidence_flag, L2_Amp_height = event_detector2(L2_TimeTicks_window_shifted, abs(L2_P_window.sum(axis=1)))
             
-            write_to_error = False
+            
             if (L2_Amp_height == 0.0) and (L1_Amp_height == 0):
                 print "No confident detection interval found, aborting."
                 write_to_error = True
