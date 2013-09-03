@@ -23,6 +23,7 @@ from datetime import datetime
 from datetime import timedelta
 import glob
 import gc
+from smooth1d import smooth
 
 def _updateFileTimes():
     '''
@@ -441,7 +442,7 @@ class Appliance(ElectricTimeStream):
       and 10 minutes after the end time of the event
     * Extract the components (real, imag, amp, pf) from the data frame
     * Create pointers to windows of interest for each of the 5 data frames: 
-        *_event (event itself), *_pre (2 min prior), *_post (2 min after)
+        *_event (event itself), *_pre (30 sec prior), *_post (30 sec after)
     
     Overview of data frames:
     dfhf: 4096xN spectrogram of high frequency noise. 
@@ -501,9 +502,9 @@ class Appliance(ElectricTimeStream):
         self.id = eventdf.loc[eventid]['id']
         
         
-        # define the start and stop times of the event
-        self.start_event = pd.to_datetime(eventdf.loc[eventid]['start'],unit='s')
-        self.stop_event = pd.to_datetime(eventdf.loc[eventid]['stop'],unit='s')
+        # define the start and stop times of the event; add 5 seconds to get rid of buffer 
+        self.start_event = pd.to_datetime(eventdf.loc[eventid]['start'],unit='s') + timedelta(seconds=5)
+        self.stop_event = pd.to_datetime(eventdf.loc[eventid]['stop'],unit='s') - timedelta(seconds=5)
         # Add a 10 minute buffer to each end for truncation 
         self.start_window = pd.to_datetime(pd.to_datetime(eventdf.loc[eventid]['start'],unit='s')-timedelta(minutes=10))
         self.stop_window = pd.to_datetime(pd.to_datetime(eventdf.loc[eventid]['stop'],unit='s')+timedelta(minutes=10))
@@ -531,11 +532,13 @@ class Appliance(ElectricTimeStream):
                 curr_df = full_df.loc[(full_df.index >= self.start_event) & (full_df.index <= self.stop_event)]
                 setattr(self,curr,curr_df)
                 
-                # set the window to 2 minutes before and 2 minutes after
-                pre_time = (pd.to_datetime(self.start_event-timedelta(minutes=2)))
-                post_time = (pd.to_datetime(self.stop_event+timedelta(minutes=2)))
-                pre_df =  full_df.loc[(full_df.index > pre_time) & (full_df.index < self.start_event)]
-                post_df =  full_df.loc[(full_df.index > self.stop_event) & (full_df.index < post_time)]                
+                # set the window to 35 sec before to 5 sec before, and 5 sec after to 35 seconds after
+                pre_time_start = (pd.to_datetime(self.start_event-timedelta(seconds=35)))
+                pre_time_end = (pd.to_datetime(self.start_event-timedelta(seconds=5)))
+                post_time_start = (pd.to_datetime(self.stop_event+timedelta(seconds=5)))
+                post_time_end = (pd.to_datetime(self.stop_event+timedelta(seconds=35)))
+                pre_df =  full_df.loc[(full_df.index > pre_time_start) & (full_df.index < self.start_event)]
+                post_df =  full_df.loc[(full_df.index > self.stop_event) & (full_df.index < post_time_end)]                
                 setattr(self,pre,pre_df)
                 setattr(self,post,post_df)
                 
@@ -566,9 +569,37 @@ class Appliance(ElectricTimeStream):
         self.avg_spectrum = pd.DataFrame({
         "on":spec_avg_on,
         "off":spec_avg_off,
-        "diff":spec_avg_on-spec_avg_off
+        "diff":spec_diff,
+        "on_smoothed":smooth(spec_avg_on,101,'hanning'),
+        "off_smoothed":smooth(spec_avg_off,101,'hanning'),
+        "diff_smoothed":smooth(spec_diff,101,'hanning'),
         })
         
+    def getOn(self,featureLength):
+        '''Sets On feature as first "featureLength" seconds of event with baseline subtracted from pre.
+        '''
+        baseline = self.l1_pre.sum()/len(self.l1_pre)
+        self.l1_on = self.l1_event[self.start_event:self.start_event+timedelta(seconds=featureLength)]-baseline
+        baseline = self.l2_pre.sum()/len(self.l2_pre)
+        self.l2_on = self.l2_event[self.start_event:self.start_event+timedelta(seconds=featureLength)]-baseline
+
+    def getOff(self,featureLength):
+        '''Sets Off feature as last "featureLength" seconds of event with baseline subtracted from post.
+        '''
+        baseline = self.l1_post.sum()/len(self.l1_post)
+        self.l1_off = self.l1_event[self.stop_event-timedelta(seconds=featureLength):self.stop_event]-baseline
+        baseline = self.l2_post.sum()/len(self.l2_post)
+        self.l2_off = self.l2_event[self.stop_event-timedelta(seconds=featureLength):self.stop_event]-baseline
+
+    def getSS(self,featureLength):
+        '''Sets SS feature as time between Start and Stop times without featureLength/2 on both ends.
+        '''
+        baseline = (self.l1_pre.sum()/len(self.l1_pre)+self.l1_post.sum()/len(self.l1_post))/2
+        length = len(self.l1_event[self.start_event+timedelta(seconds=int(featureLength/2.)):self.stop_event-timedelta(seconds=int(featureLength/2.))]-baseline)
+        self.l1_ss = (self.l1_event[self.start_event+timedelta(seconds=int(featureLength/2.)):self.stop_event-timedelta(seconds=int(featureLength/2.))]-baseline).sum()/length
+        baseline = baseline = (self.l2_pre.sum()/len(self.l2_pre)+self.l2_post.sum()/len(self.l2_post))/2
+        length = len(self.l2_event[self.start_event+timedelta(seconds=int(featureLength/2.)):self.stop_event-timedelta(seconds=int(featureLength/2.))]-baseline)
+        self.l2_ss = (self.l2_event[self.start_event+timedelta(seconds=int(featureLength/2.)):self.stop_event-timedelta(seconds=int(featureLength/2.))]-baseline).sum()/length
 
     def NaiiveFindPeaks(self,plot=False):
         ''' Very simple code to find spectral peaks in the high frequency noise.
@@ -584,16 +615,16 @@ class Appliance(ElectricTimeStream):
         if not hasattr(self,'avg_spectrum'):
             print "Must run _averageSpectra() first."
             return None
-        spec = self.avg_spectrum.loc[:,'diff']
+        spec = self.avg_spectrum.loc[:,'diff_smoothed']
         if plot == True:
-            self.avg_spectrum.plot()
+            self.avg_spectrum.loc[:,['on_smoothed','off_smoothed','diff_smoothed']].plot(legend=False)
         
         for value in spec.iloc[2:-2]:
-            if (abs(value) > abs(spec.iloc[count-1])) and \
-                    (abs(value) > abs(spec.iloc[count+1])) and \
-                    (abs(value) > abs(spec.iloc[count+2])) and \
-                    (abs(value) > abs(spec.iloc[count-2])) and \
-                    (abs(value) > 15):
+            if (value > spec.iloc[count-1]) and \
+                    (value > spec.iloc[count+1]) and \
+                    (value > spec.iloc[count+2]) and \
+                    (value > spec.iloc[count-2]) and \
+                    (value > 15):
                 self.spectral_peaks.append((count,value))
                 if plot == True:
                     plt.vlines(count,-10,0)
@@ -721,9 +752,9 @@ def LoopThruAllAppliances():
     '''
     eventdf = pd.read_csv('data/eventtimes.csv')
     # app_object_list = []
-    for ind in eventdf.index[180:]:
+    for ind in eventdf.index:
         app = Appliance(ind)
-        app.NaiivefindPeaks(plot=True)
+        app.NaiiveFindPeaks(plot=True)
         # app_object_list.append(app)
     # return app_object_list
         
