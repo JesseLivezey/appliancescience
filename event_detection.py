@@ -250,6 +250,7 @@ def event_detector2(time_ticks, vals):
 
 
     appliance_events = []
+    abs_net_changes = []
     running_difference = np.array([])
     jump_histories = []
     jump_time_histories = []
@@ -270,10 +271,16 @@ def event_detector2(time_ticks, vals):
             if (abs(net_change) < 50) and (abs(net_change) < 0.1*avg_height) and jump_histories[n][0] > 0 and jump_histories[n][-1] < 0:
                 appliance_events.append(jump_time_histories[n][0][0])
                 appliance_events.append(jump_time_histories[n][-1][-1])
+                abs_net_changes.append(abs(net_change))
                 confidence_flag = True
                 break
-    
+    abs_net_changes = array(abs_net_changes)
+    if len(appliance_events) > 2:
+        likely_appliance_interval_num = np.where(abs_net_changes==abs_net_changes.min())[0][0]
+        appliance_events = [appliance_events[likely_appliance_interval_num*2], appliance_events[likely_appliance_interval_num*2+1]]
+
     if len(appliance_events) == 0:
+        abs_net_changes = []
         running_difference = np.array([])
         jump_histories = []
         jump_time_histories = []
@@ -294,36 +301,45 @@ def event_detector2(time_ticks, vals):
                 if (abs(net_change) < 0.1*avg_height) and jump_histories[n][0] > 0 and jump_histories[n][-1] < 0:
                     appliance_events.append(jump_time_histories[n][0][0])
                     appliance_events.append(jump_time_histories[n][-1][-1])
+                    abs_net_changes.append(abs(net_change))
                     confidence_flag = True
                     break
-    
+        abs_net_changes = array(abs_net_changes)
+        if len(appliance_events) > 2:
+            likely_appliance_interval_num = np.where(abs_net_changes==abs_net_changes.min())[0][0]
+            appliance_events = [appliance_events[likely_appliance_interval_num*2], appliance_events[likely_appliance_interval_num*2+1]]
     
     # If the above fails but we're pretty sure something is going on because
     # the standard deviation of the signal is large, then just define the 
     # event to sandwich the bigger wiggles.
-    if len(appliance_events) == 0 and smooth_vals.std() > 3.0:
-        centroids, labels = kmeans2(smooth_vals, 2)
-        high_threshold_val = centroids.min() + smooth_vals.std()*2.0
-        trimmed_smooth_vals = smooth_vals[smooth_vals < high_threshold_val]
-        trimmed_time_ticks = time_ticks[smooth_vals < high_threshold_val]
-        trimmed_smooth_vals = trimmed_smooth_vals[10:-10]
-        trimmed_time_ticks = trimmed_time_ticks[10:-10]
-        if trimmed_smooth_vals.std() > 3.0:
-            centroids, labels = kmeans2(trimmed_smooth_vals, 2)
-            low_threshold_val = centroids.min() + trimmed_smooth_vals.std()
-            appliance_events = [ trimmed_time_ticks[where(trimmed_smooth_vals>low_threshold_val)[0].min()], trimmed_time_ticks[where(trimmed_smooth_vals>low_threshold_val)[0].max()] ]
+#     if len(appliance_events) == 0 and smooth_vals.std() > 3.0:
+#         centroids, labels = kmeans2(smooth_vals, 2)
+#         high_threshold_val = centroids.min() + smooth_vals.std()*2.0
+#         trimmed_smooth_vals = smooth_vals[smooth_vals < high_threshold_val]
+#         trimmed_time_ticks = time_ticks[smooth_vals < high_threshold_val]
+#         trimmed_smooth_vals = trimmed_smooth_vals[10:-10]
+#         trimmed_time_ticks = trimmed_time_ticks[10:-10]
+#         if trimmed_smooth_vals.std() > 3.0:
+#             centroids, labels = kmeans2(trimmed_smooth_vals, 2)
+#             low_threshold_val = centroids.min() + trimmed_smooth_vals.std()
+#             appliance_events = [ trimmed_time_ticks[where(trimmed_smooth_vals>low_threshold_val)[0].min()], trimmed_time_ticks[where(trimmed_smooth_vals>low_threshold_val)[0].max()] ]
+#         else:
+#             appliance_events = [ time_ticks[where(smooth_vals>high_threshold_val)[0].min()], time_ticks[where(smooth_vals>high_threshold_val)[0].max()] ]
+    
+
+    
+    if len(appliance_events) > 0:
+        trimmed_time_ticks = time_ticks[(time_ticks>(appliance_events[0]-3)) & (time_ticks<(appliance_events[1]+3))]
+        trimmed_stream = vals[(time_ticks>(appliance_events[0]-3)) & (time_ticks<(appliance_events[1]+3))]
+    
+        event_height, event_height_std = extract_event_value(trimmed_time_ticks, trimmed_stream)
+    
+        if (event_height < 0) or (event_height < 2*event_height_std):
+            return [], False, 0.0
         else:
-            appliance_events = [ time_ticks[where(smooth_vals>high_threshold_val)[0].min()], time_ticks[where(smooth_vals>high_threshold_val)[0].max()] ]
-    
-    trimmed_time_ticks = time_ticks[(time_ticks>(appliance_events[0]-3)) & (time_ticks<(appliance_events[1]+3))]
-    trimmed_stream = vals[(time_ticks>(appliance_events[0]-3)) & (time_ticks<(appliance_events[1]+3))]
-    
-    event_height, event_height_std = extract_event_value(trimmed_time_ticks, trimmed_stream)
-    
-    if (event_height < 0) or (event_height < 2*event_height_std):
-        return [], False, 0.0
+            return appliance_events, confidence_flag, event_height
     else:
-        return appliance_events, confidence_flag, event_height
+            return appliance_events, confidence_flag, 0.0
 
 
 
@@ -413,10 +429,10 @@ key_array.sort()
 # sys.exit()
 
 for appliance_id in key_array:
-# for appliance_id in [8]:
+# for appliance_id in [16]:
     appliance_name = taggingInfo_dict[appliance_id]['ApplianceName'].replace("/", "")
     for interval in taggingInfo_dict[appliance_id]['OnOffSeq']:
-    # for interval in [taggingInfo_dict[appliance_id]['OnOffSeq'][1]]:
+    # for interval in [taggingInfo_dict[appliance_id]['OnOffSeq'][0]]:
         try:
             print appliance_id, appliance_name, interval
             start_time = interval[0] - 60
