@@ -510,7 +510,6 @@ class Appliance(ElectricTimeStream):
 
         ## Find the hdf5 file that contains the training event ##
         row = filedf.loc[(filedf.filestart < self.start_event) & (filedf.filestop > self.stop_event)]
-        raise Exception
         if len(row) == 0:
             raise IOError("Could not find this training event in a datafile time window!")
         elif len(row) > 1:
