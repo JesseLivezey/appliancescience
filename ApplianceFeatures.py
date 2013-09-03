@@ -575,7 +575,31 @@ class Appliance(ElectricTimeStream):
         "diff_smoothed":smooth(spec_diff,101,'hanning'),
         })
         
-        
+    def getOn(self,featureLength):
+        '''Sets On feature as first "featureLength" seconds of event with baseline subtracted from pre.
+        '''
+        baseline = self.l1_pre.sum()/len(self.l1_pre)
+        self.l1_on = self.l1_event[self.start_event:self.start_event+timedelta(seconds=featureLength)]-baseline
+        baseline = self.l2_pre.sum()/len(self.l2_pre)
+        self.l2_on = self.l2_event[self.start_event:self.start_event+timedelta(seconds=featureLength)]-baseline
+
+    def getOff(self,featureLength):
+        '''Sets Off feature as last "featureLength" seconds of event with baseline subtracted from post.
+        '''
+        baseline = self.l1_post.sum()/len(self.l1_post)
+        self.l1_off = self.l1_event[self.stop_event-timedelta(seconds=featureLength):self.stop_event]-baseline
+        baseline = self.l2_post.sum()/len(self.l2_post)
+        self.l2_off = self.l2_event[self.stop_event-timedelta(seconds=featureLength):self.stop_event]-baseline
+
+    def getSS(self,featureLength):
+        '''Sets SS feature as time between Start and Stop times without featureLength/2 on both ends.
+        '''
+        baseline = (self.l1_pre.sum()/len(self.l1_pre)+self.l1_post.sum()/len(self.l1_post))/2
+        length = len(self.l1_event[self.start_event+timedelta(seconds=int(featureLength/2.)):self.stop_event-timedelta(seconds=int(featureLength/2.))]-baseline)
+        self.l1_ss = (self.l1_event[self.start_event+timedelta(seconds=int(featureLength/2.)):self.stop_event-timedelta(seconds=int(featureLength/2.))]-baseline).sum()/length
+        baseline = baseline = (self.l2_pre.sum()/len(self.l2_pre)+self.l2_post.sum()/len(self.l2_post))/2
+        length = len(self.l2_event[self.start_event+timedelta(seconds=int(featureLength/2.)):self.stop_event-timedelta(seconds=int(featureLength/2.))]-baseline)
+        self.l2_ss = (self.l2_event[self.start_event+timedelta(seconds=int(featureLength/2.)):self.stop_event-timedelta(seconds=int(featureLength/2.))]-baseline).sum()/length
 
     def NaiiveFindPeaks(self,plot=False):
         ''' Very simple code to find spectral peaks in the high frequency noise.
