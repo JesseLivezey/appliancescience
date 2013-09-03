@@ -124,7 +124,16 @@ def combine_jumps_together(jumps, time_ticks, smooth_vals):
 
 
 
-
+# Median Absolute Deviation clipping for input array of numbers.
+def mad_clipping(input_data, sigma_clip_level):
+    medval = np.median(input_data)
+    sigma = 1.48 * np.median(abs(medval - input_data))
+    high_sigma_clip_limit = medval + sigma_clip_level * sigma
+    low_sigma_clip_limit = medval - sigma_clip_level * sigma
+    clipped_data = input_data[(input_data>(low_sigma_clip_limit)) & (input_data<(high_sigma_clip_limit))]
+    new_medval = np.median(clipped_data)
+    new_sigma = 1.48 * np.median(abs(medval - clipped_data))
+    return clipped_data, new_medval, new_sigma
 
 def test_jumps_cleanliness(jumps):
     """
@@ -138,6 +147,40 @@ def test_jumps_cleanliness(jumps):
             return False, False
     else:
         return True, False
+
+def extract_event_value(stream_time_ticks, stream):
+# L1 and L2 data is collected at a rate of 6.0064028254118895 times per second
+# HF spectra data is collected at a rate of 0.9375005859378663 times per second
+    median_stream = ndimage.filters.median_filter(stream, 6.0064028254118895) # smooth with width 1 second of data
+    smooth_stream = ndimage.filters.gaussian_filter1d(median_stream, 1.0) # smooth
+    stream_gradient = np.gradient(smooth_stream)
+    peak_locs = signal.find_peaks_cwt(abs(stream_gradient), np.array([1]), min_snr=1)
+    clipped_stream_gradient, stream_gradient_median, std_around_zero = mad_clipping(stream_gradient, 3)
+    vetted_peak_locs = list(np.where(abs(stream_gradient[peak_locs]) > 5*std_around_zero)[0])
+    if len(vetted_peak_locs) > 1:
+        peak_indices = list(np.array(peak_locs)[vetted_peak_locs])
+        peak_times = stream_time_ticks[peak_indices]
+        peak_data = stream_gradient[peak_indices]
+        precise_event_start_timestamp = peak_times.min()
+        precise_event_end_timestamp = peak_times.max()
+        buffer_time = 0.5
+        before_stream = stream[stream_time_ticks<(precise_event_start_timestamp-buffer_time)]
+        during_stream = stream[(stream_time_ticks>(precise_event_start_timestamp+buffer_time)) & (stream_time_ticks<(precise_event_end_timestamp-buffer_time))]
+        after_stream = stream[stream_time_ticks>(precise_event_end_timestamp+buffer_time)]
+        baseline_std = ((before_stream.std())**2 + (after_stream.std())**2)**0.5
+        if not (abs(median(before_stream) - median(after_stream)) < 2*baseline_std):
+            # print "OMG, before_stream and after_stream indicate a baseline that changes during the event. Abort!!!"
+            return None, None
+        else:
+            baseline_value = (median(before_stream) + median(after_stream))/2.0
+            cropped_during_stream, event_value, event_std = mad_clipping(during_stream, 3)
+            event_difference = event_value - baseline_value
+            event_different_std = ((baseline_std)**2 + (event_std)**2)**0.5
+            return event_difference, event_different_std
+    else:
+        # print "OMG, there were not at least 2 detected jumps in the stream, so no event can be measured."
+        return None, None
+
 
 
 def event_detector2(time_ticks, vals):
@@ -188,7 +231,24 @@ def event_detector2(time_ticks, vals):
         n_cycles += 1
         if (jumps_empty) or (n_cycles>100):
             break
-    
+
+    try:
+        if len(jumps) > 1:
+            while (jumps[0][1][0] < 0):
+                jumps.pop(0)
+            while (jumps[-1][1][0] > 0):
+                jumps.pop(-1)
+        if len(jumps) < 2:
+            # print "Cleaning jumps resulted in an error, so there is probably no"
+            # print "well-detected event interval. Retruning empty list."
+            return [], confidence_flag
+    except:
+        # print "Cleaning jumps resulted in an error, so there is probably no"
+        # print "well-detected event interval. Retruning empty list."
+        return [], confidence_flag
+
+
+
     appliance_events = []
     running_difference = np.array([])
     jump_histories = []
@@ -255,7 +315,15 @@ def event_detector2(time_ticks, vals):
         else:
             appliance_events = [ time_ticks[where(smooth_vals>high_threshold_val)[0].min()], time_ticks[where(smooth_vals>high_threshold_val)[0].max()] ]
     
-    return appliance_events, confidence_flag
+    trimmed_time_ticks = time_ticks[(time_ticks>(appliance_events[0]-3)) & (time_ticks<(appliance_events[1]+3))]
+    trimmed_stream = vals[(time_ticks>(appliance_events[0]-3)) & (time_ticks<(appliance_events[1]+3))]
+    
+    event_height, event_height_std = extract_event_value(trimmed_time_ticks, trimmed_stream)
+    
+    if (event_height < 0) or (event_height < 2*event_height_std):
+        return [], False
+    else:
+        return appliance_events, confidence_flag
 
 
 
@@ -270,10 +338,10 @@ house_dir = sys.argv[1]
 tagged_training_filename = sys.argv[2]
 
 # This is the directory we're working with presently
-# house_dir = "data/H2/"
+# house_dir = "data/H4/"
 
 # This is the training file we're investigating
-# tagged_training_filename = "Tagged_Training_06_14_1339657201.mat"
+# tagged_training_filename = "Tagged_Training_07_27_1343372401.mat"
 
 # Read in the matlab datafile
 buf = io.loadmat(house_dir + tagged_training_filename)['Buffer']
@@ -345,14 +413,14 @@ key_array.sort()
 # sys.exit()
 
 for appliance_id in key_array:
-# for appliance_id in [27]:
+# for appliance_id in [29]:
     appliance_name = taggingInfo_dict[appliance_id]['ApplianceName'].replace("/", "")
     for interval in taggingInfo_dict[appliance_id]['OnOffSeq']:
-    # for interval in [taggingInfo_dict[appliance_id]['OnOffSeq'][2]]:
+    # for interval in [taggingInfo_dict[appliance_id]['OnOffSeq'][1]]:
         try:
             print appliance_id, appliance_name, interval
-            start_time = interval[0] - 35
-            end_time = interval[1] + 35
+            start_time = interval[0] - 60
+            end_time = interval[1] + 60
 
             a = HF_TimeTicks>=start_time
             b = HF_TimeTicks<=end_time
@@ -398,189 +466,189 @@ for appliance_id in key_array:
             tagged_event_middle_time = (interval[0] + interval[1])/2.0 - HF_TimeTicks_window[0]
 
         
-            L1_Real_event_intervals, L1_Real_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window.sum(axis=1).real)
-            L2_Real_event_intervals, L2_Real_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window.sum(axis=1).real)
-
-            L1_Imag_event_intervals, L1_Imag_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window.sum(axis=1).imag)
-            L2_Imag_event_intervals, L2_Imag_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window.sum(axis=1).imag)
+#             L1_Real_event_intervals, L1_Real_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window.sum(axis=1).real)
+#             L2_Real_event_intervals, L2_Real_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window.sum(axis=1).real)
+# 
+#             L1_Imag_event_intervals, L1_Imag_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window.sum(axis=1).imag)
+#             L2_Imag_event_intervals, L2_Imag_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window.sum(axis=1).imag)
         
             L1_Amp_event_intervals, L1_Amp_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, abs(L1_P_window.sum(axis=1)))
             L2_Amp_event_intervals, L2_Amp_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, abs(L2_P_window.sum(axis=1)))
 
-            L1_PF_event_intervals, L1_PF_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, np.cos(np.angle(L1_P_window.sum(axis=1))))
-            L2_PF_event_intervals, L2_PF_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, np.cos(np.angle(L2_P_window.sum(axis=1))))
-        
-            L1_Real0_event_intervals, L1_Real0_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,0].real)
-            L1_Real1_event_intervals, L1_Real1_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,1].real)
-            L1_Real2_event_intervals, L1_Real2_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,2].real)
-            L1_Real3_event_intervals, L1_Real3_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,3].real)
-            L1_Real4_event_intervals, L1_Real4_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,4].real)
-            L1_Real5_event_intervals, L1_Real5_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,5].real)
-        
-            L1_Imag0_event_intervals, L1_Imag0_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,0].imag)
-            L1_Imag1_event_intervals, L1_Imag1_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,1].imag)
-            L1_Imag2_event_intervals, L1_Imag2_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,2].imag)
-            L1_Imag3_event_intervals, L1_Imag3_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,3].imag)
-            L1_Imag4_event_intervals, L1_Imag4_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,4].imag)
-            L1_Imag5_event_intervals, L1_Imag5_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,5].imag)
-        
-            L1_Amp0_event_intervals, L1_Amp0_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, abs(L1_P_window[:,0]))
-            L1_Amp1_event_intervals, L1_Amp1_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, abs(L1_P_window[:,1]))
-            L1_Amp2_event_intervals, L1_Amp2_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, abs(L1_P_window[:,2]))
-            L1_Amp3_event_intervals, L1_Amp3_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, abs(L1_P_window[:,3]))
-            L1_Amp4_event_intervals, L1_Amp4_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, abs(L1_P_window[:,4]))
-            L1_Amp5_event_intervals, L1_Amp5_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, abs(L1_P_window[:,5]))
-        
-            L1_PF0_event_intervals, L1_PF0_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, np.cos(np.angle(L1_P_window[:,0])))
-            L1_PF1_event_intervals, L1_PF1_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, np.cos(np.angle(L1_P_window[:,1])))
-            L1_PF2_event_intervals, L1_PF2_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, np.cos(np.angle(L1_P_window[:,2])))
-            L1_PF3_event_intervals, L1_PF3_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, np.cos(np.angle(L1_P_window[:,3])))
-            L1_PF4_event_intervals, L1_PF4_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, np.cos(np.angle(L1_P_window[:,4])))
-            L1_PF5_event_intervals, L1_PF5_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, np.cos(np.angle(L1_P_window[:,5])))
-        
-            L2_Real0_event_intervals, L2_Real0_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,0].real)
-            L2_Real1_event_intervals, L2_Real1_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,1].real)
-            L2_Real2_event_intervals, L2_Real2_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,2].real)
-            L2_Real3_event_intervals, L2_Real3_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,3].real)
-            L2_Real4_event_intervals, L2_Real4_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,4].real)
-            L2_Real5_event_intervals, L2_Real5_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,5].real)
-        
-            L2_Imag0_event_intervals, L2_Imag0_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,0].imag)
-            L2_Imag1_event_intervals, L2_Imag1_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,1].imag)
-            L2_Imag2_event_intervals, L2_Imag2_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,2].imag)
-            L2_Imag3_event_intervals, L2_Imag3_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,3].imag)
-            L2_Imag4_event_intervals, L2_Imag4_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,4].imag)
-            L2_Imag5_event_intervals, L2_Imag5_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,5].imag)
-        
-            L2_Amp0_event_intervals, L2_Amp0_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, abs(L2_P_window[:,0]))
-            L2_Amp1_event_intervals, L2_Amp1_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, abs(L2_P_window[:,1]))
-            L2_Amp2_event_intervals, L2_Amp2_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, abs(L2_P_window[:,2]))
-            L2_Amp3_event_intervals, L2_Amp3_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, abs(L2_P_window[:,3]))
-            L2_Amp4_event_intervals, L2_Amp4_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, abs(L2_P_window[:,4]))
-            L2_Amp5_event_intervals, L2_Amp5_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, abs(L2_P_window[:,5]))
-        
-            L2_PF0_event_intervals, L2_PF0_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, np.cos(np.angle(L2_P_window[:,0])))
-            L2_PF1_event_intervals, L2_PF1_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, np.cos(np.angle(L2_P_window[:,1])))
-            L2_PF2_event_intervals, L2_PF2_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, np.cos(np.angle(L2_P_window[:,2])))
-            L2_PF3_event_intervals, L2_PF3_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, np.cos(np.angle(L2_P_window[:,3])))
-            L2_PF4_event_intervals, L2_PF4_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, np.cos(np.angle(L2_P_window[:,4])))
-            L2_PF5_event_intervals, L2_PF5_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, np.cos(np.angle(L2_P_window[:,5])))
+#             L1_PF_event_intervals, L1_PF_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, np.cos(np.angle(L1_P_window.sum(axis=1))))
+#             L2_PF_event_intervals, L2_PF_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, np.cos(np.angle(L2_P_window.sum(axis=1))))
+#         
+#             L1_Real0_event_intervals, L1_Real0_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,0].real)
+#             L1_Real1_event_intervals, L1_Real1_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,1].real)
+#             L1_Real2_event_intervals, L1_Real2_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,2].real)
+#             L1_Real3_event_intervals, L1_Real3_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,3].real)
+#             L1_Real4_event_intervals, L1_Real4_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,4].real)
+#             L1_Real5_event_intervals, L1_Real5_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,5].real)
+#         
+#             L1_Imag0_event_intervals, L1_Imag0_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,0].imag)
+#             L1_Imag1_event_intervals, L1_Imag1_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,1].imag)
+#             L1_Imag2_event_intervals, L1_Imag2_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,2].imag)
+#             L1_Imag3_event_intervals, L1_Imag3_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,3].imag)
+#             L1_Imag4_event_intervals, L1_Imag4_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,4].imag)
+#             L1_Imag5_event_intervals, L1_Imag5_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, L1_P_window[:,5].imag)
+#         
+#             L1_Amp0_event_intervals, L1_Amp0_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, abs(L1_P_window[:,0]))
+#             L1_Amp1_event_intervals, L1_Amp1_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, abs(L1_P_window[:,1]))
+#             L1_Amp2_event_intervals, L1_Amp2_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, abs(L1_P_window[:,2]))
+#             L1_Amp3_event_intervals, L1_Amp3_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, abs(L1_P_window[:,3]))
+#             L1_Amp4_event_intervals, L1_Amp4_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, abs(L1_P_window[:,4]))
+#             L1_Amp5_event_intervals, L1_Amp5_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, abs(L1_P_window[:,5]))
+#         
+#             L1_PF0_event_intervals, L1_PF0_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, np.cos(np.angle(L1_P_window[:,0])))
+#             L1_PF1_event_intervals, L1_PF1_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, np.cos(np.angle(L1_P_window[:,1])))
+#             L1_PF2_event_intervals, L1_PF2_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, np.cos(np.angle(L1_P_window[:,2])))
+#             L1_PF3_event_intervals, L1_PF3_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, np.cos(np.angle(L1_P_window[:,3])))
+#             L1_PF4_event_intervals, L1_PF4_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, np.cos(np.angle(L1_P_window[:,4])))
+#             L1_PF5_event_intervals, L1_PF5_confidence_flag = event_detector2(L1_TimeTicks_window_shifted, np.cos(np.angle(L1_P_window[:,5])))
+#         
+#             L2_Real0_event_intervals, L2_Real0_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,0].real)
+#             L2_Real1_event_intervals, L2_Real1_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,1].real)
+#             L2_Real2_event_intervals, L2_Real2_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,2].real)
+#             L2_Real3_event_intervals, L2_Real3_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,3].real)
+#             L2_Real4_event_intervals, L2_Real4_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,4].real)
+#             L2_Real5_event_intervals, L2_Real5_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,5].real)
+#         
+#             L2_Imag0_event_intervals, L2_Imag0_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,0].imag)
+#             L2_Imag1_event_intervals, L2_Imag1_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,1].imag)
+#             L2_Imag2_event_intervals, L2_Imag2_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,2].imag)
+#             L2_Imag3_event_intervals, L2_Imag3_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,3].imag)
+#             L2_Imag4_event_intervals, L2_Imag4_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,4].imag)
+#             L2_Imag5_event_intervals, L2_Imag5_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, L2_P_window[:,5].imag)
+#         
+#             L2_Amp0_event_intervals, L2_Amp0_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, abs(L2_P_window[:,0]))
+#             L2_Amp1_event_intervals, L2_Amp1_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, abs(L2_P_window[:,1]))
+#             L2_Amp2_event_intervals, L2_Amp2_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, abs(L2_P_window[:,2]))
+#             L2_Amp3_event_intervals, L2_Amp3_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, abs(L2_P_window[:,3]))
+#             L2_Amp4_event_intervals, L2_Amp4_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, abs(L2_P_window[:,4]))
+#             L2_Amp5_event_intervals, L2_Amp5_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, abs(L2_P_window[:,5]))
+#         
+#             L2_PF0_event_intervals, L2_PF0_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, np.cos(np.angle(L2_P_window[:,0])))
+#             L2_PF1_event_intervals, L2_PF1_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, np.cos(np.angle(L2_P_window[:,1])))
+#             L2_PF2_event_intervals, L2_PF2_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, np.cos(np.angle(L2_P_window[:,2])))
+#             L2_PF3_event_intervals, L2_PF3_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, np.cos(np.angle(L2_P_window[:,3])))
+#             L2_PF4_event_intervals, L2_PF4_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, np.cos(np.angle(L2_P_window[:,4])))
+#             L2_PF5_event_intervals, L2_PF5_confidence_flag = event_detector2(L2_TimeTicks_window_shifted, np.cos(np.angle(L2_P_window[:,5])))
         
             candidate_event_intervals = []
-            candidate_event_intervals.append(L1_Real_event_intervals)
-            candidate_event_intervals.append(L2_Real_event_intervals)
-            candidate_event_intervals.append(L1_Imag_event_intervals)
-            candidate_event_intervals.append(L2_Imag_event_intervals)
+#             candidate_event_intervals.append(L1_Real_event_intervals)
+#             candidate_event_intervals.append(L2_Real_event_intervals)
+#             candidate_event_intervals.append(L1_Imag_event_intervals)
+#             candidate_event_intervals.append(L2_Imag_event_intervals)
             candidate_event_intervals.append(L1_Amp_event_intervals)
             candidate_event_intervals.append(L2_Amp_event_intervals)
-            candidate_event_intervals.append(L1_PF_event_intervals)
-            candidate_event_intervals.append(L2_PF_event_intervals)
-            candidate_event_intervals.append(L1_Real0_event_intervals)
-            candidate_event_intervals.append(L1_Real1_event_intervals)
-            candidate_event_intervals.append(L1_Real2_event_intervals)
-            candidate_event_intervals.append(L1_Real3_event_intervals)
-            candidate_event_intervals.append(L1_Real4_event_intervals)
-            candidate_event_intervals.append(L1_Real5_event_intervals)
-            candidate_event_intervals.append(L1_Imag0_event_intervals)
-            candidate_event_intervals.append(L1_Imag1_event_intervals)
-            candidate_event_intervals.append(L1_Imag2_event_intervals)
-            candidate_event_intervals.append(L1_Imag3_event_intervals)
-            candidate_event_intervals.append(L1_Imag4_event_intervals)
-            candidate_event_intervals.append(L1_Imag5_event_intervals)
-            candidate_event_intervals.append(L1_Amp0_event_intervals)
-            candidate_event_intervals.append(L1_Amp1_event_intervals)
-            candidate_event_intervals.append(L1_Amp2_event_intervals)
-            candidate_event_intervals.append(L1_Amp3_event_intervals)
-            candidate_event_intervals.append(L1_Amp4_event_intervals)
-            candidate_event_intervals.append(L1_Amp5_event_intervals)
-            candidate_event_intervals.append(L1_PF0_event_intervals)
-            candidate_event_intervals.append(L1_PF1_event_intervals)
-            candidate_event_intervals.append(L1_PF2_event_intervals)
-            candidate_event_intervals.append(L1_PF3_event_intervals)
-            candidate_event_intervals.append(L1_PF4_event_intervals)
-            candidate_event_intervals.append(L1_PF5_event_intervals)
-            candidate_event_intervals.append(L2_Real0_event_intervals)
-            candidate_event_intervals.append(L2_Real1_event_intervals)
-            candidate_event_intervals.append(L2_Real2_event_intervals)
-            candidate_event_intervals.append(L2_Real3_event_intervals)
-            candidate_event_intervals.append(L2_Real4_event_intervals)
-            candidate_event_intervals.append(L2_Real5_event_intervals)
-            candidate_event_intervals.append(L2_Imag0_event_intervals)
-            candidate_event_intervals.append(L2_Imag1_event_intervals)
-            candidate_event_intervals.append(L2_Imag2_event_intervals)
-            candidate_event_intervals.append(L2_Imag3_event_intervals)
-            candidate_event_intervals.append(L2_Imag4_event_intervals)
-            candidate_event_intervals.append(L2_Imag5_event_intervals)
-            candidate_event_intervals.append(L2_Amp0_event_intervals)
-            candidate_event_intervals.append(L2_Amp1_event_intervals)
-            candidate_event_intervals.append(L2_Amp2_event_intervals)
-            candidate_event_intervals.append(L2_Amp3_event_intervals)
-            candidate_event_intervals.append(L2_Amp4_event_intervals)
-            candidate_event_intervals.append(L2_Amp5_event_intervals)
-            candidate_event_intervals.append(L2_PF0_event_intervals)
-            candidate_event_intervals.append(L2_PF1_event_intervals)
-            candidate_event_intervals.append(L2_PF2_event_intervals)
-            candidate_event_intervals.append(L2_PF3_event_intervals)
-            candidate_event_intervals.append(L2_PF4_event_intervals)
-            candidate_event_intervals.append(L2_PF5_event_intervals)
+#             candidate_event_intervals.append(L1_PF_event_intervals)
+#             candidate_event_intervals.append(L2_PF_event_intervals)
+#             candidate_event_intervals.append(L1_Real0_event_intervals)
+#             candidate_event_intervals.append(L1_Real1_event_intervals)
+#             candidate_event_intervals.append(L1_Real2_event_intervals)
+#             candidate_event_intervals.append(L1_Real3_event_intervals)
+#             candidate_event_intervals.append(L1_Real4_event_intervals)
+#             candidate_event_intervals.append(L1_Real5_event_intervals)
+#             candidate_event_intervals.append(L1_Imag0_event_intervals)
+#             candidate_event_intervals.append(L1_Imag1_event_intervals)
+#             candidate_event_intervals.append(L1_Imag2_event_intervals)
+#             candidate_event_intervals.append(L1_Imag3_event_intervals)
+#             candidate_event_intervals.append(L1_Imag4_event_intervals)
+#             candidate_event_intervals.append(L1_Imag5_event_intervals)
+#             candidate_event_intervals.append(L1_Amp0_event_intervals)
+#             candidate_event_intervals.append(L1_Amp1_event_intervals)
+#             candidate_event_intervals.append(L1_Amp2_event_intervals)
+#             candidate_event_intervals.append(L1_Amp3_event_intervals)
+#             candidate_event_intervals.append(L1_Amp4_event_intervals)
+#             candidate_event_intervals.append(L1_Amp5_event_intervals)
+#             candidate_event_intervals.append(L1_PF0_event_intervals)
+#             candidate_event_intervals.append(L1_PF1_event_intervals)
+#             candidate_event_intervals.append(L1_PF2_event_intervals)
+#             candidate_event_intervals.append(L1_PF3_event_intervals)
+#             candidate_event_intervals.append(L1_PF4_event_intervals)
+#             candidate_event_intervals.append(L1_PF5_event_intervals)
+#             candidate_event_intervals.append(L2_Real0_event_intervals)
+#             candidate_event_intervals.append(L2_Real1_event_intervals)
+#             candidate_event_intervals.append(L2_Real2_event_intervals)
+#             candidate_event_intervals.append(L2_Real3_event_intervals)
+#             candidate_event_intervals.append(L2_Real4_event_intervals)
+#             candidate_event_intervals.append(L2_Real5_event_intervals)
+#             candidate_event_intervals.append(L2_Imag0_event_intervals)
+#             candidate_event_intervals.append(L2_Imag1_event_intervals)
+#             candidate_event_intervals.append(L2_Imag2_event_intervals)
+#             candidate_event_intervals.append(L2_Imag3_event_intervals)
+#             candidate_event_intervals.append(L2_Imag4_event_intervals)
+#             candidate_event_intervals.append(L2_Imag5_event_intervals)
+#             candidate_event_intervals.append(L2_Amp0_event_intervals)
+#             candidate_event_intervals.append(L2_Amp1_event_intervals)
+#             candidate_event_intervals.append(L2_Amp2_event_intervals)
+#             candidate_event_intervals.append(L2_Amp3_event_intervals)
+#             candidate_event_intervals.append(L2_Amp4_event_intervals)
+#             candidate_event_intervals.append(L2_Amp5_event_intervals)
+#             candidate_event_intervals.append(L2_PF0_event_intervals)
+#             candidate_event_intervals.append(L2_PF1_event_intervals)
+#             candidate_event_intervals.append(L2_PF2_event_intervals)
+#             candidate_event_intervals.append(L2_PF3_event_intervals)
+#             candidate_event_intervals.append(L2_PF4_event_intervals)
+#             candidate_event_intervals.append(L2_PF5_event_intervals)
         
             candidate_event_confidence_flags = []
-            candidate_event_confidence_flags.append(L1_Real_confidence_flag)
-            candidate_event_confidence_flags.append(L2_Real_confidence_flag)
-            candidate_event_confidence_flags.append(L1_Imag_confidence_flag)
-            candidate_event_confidence_flags.append(L2_Imag_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_Real_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_Real_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_Imag_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_Imag_confidence_flag)
             candidate_event_confidence_flags.append(L1_Amp_confidence_flag)
             candidate_event_confidence_flags.append(L2_Amp_confidence_flag)
-            candidate_event_confidence_flags.append(L1_PF_confidence_flag)
-            candidate_event_confidence_flags.append(L2_PF_confidence_flag)
-            candidate_event_confidence_flags.append(L1_Real0_confidence_flag)
-            candidate_event_confidence_flags.append(L1_Real1_confidence_flag)
-            candidate_event_confidence_flags.append(L1_Real2_confidence_flag)
-            candidate_event_confidence_flags.append(L1_Real3_confidence_flag)
-            candidate_event_confidence_flags.append(L1_Real4_confidence_flag)
-            candidate_event_confidence_flags.append(L1_Real5_confidence_flag)
-            candidate_event_confidence_flags.append(L1_Imag0_confidence_flag)
-            candidate_event_confidence_flags.append(L1_Imag1_confidence_flag)
-            candidate_event_confidence_flags.append(L1_Imag2_confidence_flag)
-            candidate_event_confidence_flags.append(L1_Imag3_confidence_flag)
-            candidate_event_confidence_flags.append(L1_Imag4_confidence_flag)
-            candidate_event_confidence_flags.append(L1_Imag5_confidence_flag)
-            candidate_event_confidence_flags.append(L1_Amp0_confidence_flag)
-            candidate_event_confidence_flags.append(L1_Amp1_confidence_flag)
-            candidate_event_confidence_flags.append(L1_Amp2_confidence_flag)
-            candidate_event_confidence_flags.append(L1_Amp3_confidence_flag)
-            candidate_event_confidence_flags.append(L1_Amp4_confidence_flag)
-            candidate_event_confidence_flags.append(L1_Amp5_confidence_flag)
-            candidate_event_confidence_flags.append(L1_PF0_confidence_flag)
-            candidate_event_confidence_flags.append(L1_PF1_confidence_flag)
-            candidate_event_confidence_flags.append(L1_PF2_confidence_flag)
-            candidate_event_confidence_flags.append(L1_PF3_confidence_flag)
-            candidate_event_confidence_flags.append(L1_PF4_confidence_flag)
-            candidate_event_confidence_flags.append(L1_PF5_confidence_flag)
-            candidate_event_confidence_flags.append(L2_Real0_confidence_flag)
-            candidate_event_confidence_flags.append(L2_Real1_confidence_flag)
-            candidate_event_confidence_flags.append(L2_Real2_confidence_flag)
-            candidate_event_confidence_flags.append(L2_Real3_confidence_flag)
-            candidate_event_confidence_flags.append(L2_Real4_confidence_flag)
-            candidate_event_confidence_flags.append(L2_Real5_confidence_flag)
-            candidate_event_confidence_flags.append(L2_Imag0_confidence_flag)
-            candidate_event_confidence_flags.append(L2_Imag1_confidence_flag)
-            candidate_event_confidence_flags.append(L2_Imag2_confidence_flag)
-            candidate_event_confidence_flags.append(L2_Imag3_confidence_flag)
-            candidate_event_confidence_flags.append(L2_Imag4_confidence_flag)
-            candidate_event_confidence_flags.append(L2_Imag5_confidence_flag)
-            candidate_event_confidence_flags.append(L2_Amp0_confidence_flag)
-            candidate_event_confidence_flags.append(L2_Amp1_confidence_flag)
-            candidate_event_confidence_flags.append(L2_Amp2_confidence_flag)
-            candidate_event_confidence_flags.append(L2_Amp3_confidence_flag)
-            candidate_event_confidence_flags.append(L2_Amp4_confidence_flag)
-            candidate_event_confidence_flags.append(L2_Amp5_confidence_flag)
-            candidate_event_confidence_flags.append(L2_PF0_confidence_flag)
-            candidate_event_confidence_flags.append(L2_PF1_confidence_flag)
-            candidate_event_confidence_flags.append(L2_PF2_confidence_flag)
-            candidate_event_confidence_flags.append(L2_PF3_confidence_flag)
-            candidate_event_confidence_flags.append(L2_PF4_confidence_flag)
-            candidate_event_confidence_flags.append(L2_PF5_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_PF_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_PF_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_Real0_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_Real1_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_Real2_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_Real3_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_Real4_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_Real5_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_Imag0_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_Imag1_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_Imag2_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_Imag3_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_Imag4_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_Imag5_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_Amp0_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_Amp1_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_Amp2_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_Amp3_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_Amp4_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_Amp5_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_PF0_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_PF1_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_PF2_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_PF3_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_PF4_confidence_flag)
+#             candidate_event_confidence_flags.append(L1_PF5_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_Real0_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_Real1_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_Real2_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_Real3_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_Real4_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_Real5_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_Imag0_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_Imag1_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_Imag2_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_Imag3_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_Imag4_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_Imag5_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_Amp0_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_Amp1_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_Amp2_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_Amp3_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_Amp4_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_Amp5_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_PF0_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_PF1_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_PF2_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_PF3_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_PF4_confidence_flag)
+#             candidate_event_confidence_flags.append(L2_PF5_confidence_flag)
         
         
             confident_candidate_event_intervals = np.array(candidate_event_intervals)[np.array(candidate_event_confidence_flags)]
