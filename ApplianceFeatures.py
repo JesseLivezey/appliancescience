@@ -502,9 +502,9 @@ class Appliance(ElectricTimeStream):
         self.id = eventdf.loc[eventid]['id']
         
         
-        # define the start and stop times of the event; add 5 seconds to get rid of buffer 
-        self.start_event = pd.to_datetime(eventdf.loc[eventid]['start'],unit='s') + timedelta(seconds=5)
-        self.stop_event = pd.to_datetime(eventdf.loc[eventid]['stop'],unit='s') - timedelta(seconds=5)
+        # define the start and stop times of the event
+        self.start_event = pd.to_datetime(eventdf.loc[eventid]['start'],unit='s') 
+        self.stop_event = pd.to_datetime(eventdf.loc[eventid]['stop'],unit='s') 
         # Add a 10 minute buffer to each end for truncation 
         self.start_window = pd.to_datetime(pd.to_datetime(eventdf.loc[eventid]['start'],unit='s')-timedelta(minutes=10))
         self.stop_window = pd.to_datetime(pd.to_datetime(eventdf.loc[eventid]['stop'],unit='s')+timedelta(minutes=10))
@@ -532,11 +532,11 @@ class Appliance(ElectricTimeStream):
                 curr_df = full_df.loc[(full_df.index >= self.start_event) & (full_df.index <= self.stop_event)]
                 setattr(self,curr,curr_df)
                 
-                # set the window to 35 sec before to 5 sec before, and 5 sec after to 35 seconds after
-                pre_time_start = (pd.to_datetime(self.start_event-timedelta(seconds=35)))
+                # set the window to 20 sec before to 5 sec before, and 5 sec after to 20 seconds after
+                pre_time_start = (pd.to_datetime(self.start_event-timedelta(seconds=20)))
                 pre_time_end = (pd.to_datetime(self.start_event-timedelta(seconds=5)))
                 post_time_start = (pd.to_datetime(self.stop_event+timedelta(seconds=5)))
-                post_time_end = (pd.to_datetime(self.stop_event+timedelta(seconds=35)))
+                post_time_end = (pd.to_datetime(self.stop_event+timedelta(seconds=20)))
                 pre_df =  full_df.loc[(full_df.index > pre_time_start) & (full_df.index < self.start_event)]
                 post_df =  full_df.loc[(full_df.index > self.stop_event) & (full_df.index < post_time_end)]                
                 setattr(self,pre,pre_df)
@@ -733,8 +733,15 @@ def LoopThruAllAppliances():
         app.NaiiveFindPeaks(plot=True)
         # app_object_list.append(app)
     # return app_object_list
-        
-    
+
+def ZeroTheNegatives(series):
+    '''
+    Given a pandas series, return the dataframe with any negative numbers set 
+    to zero.
+    '''        
+    s2 = series.copy()
+    s2.loc[s2.values<0]=0
+    return s2
     
 def parse_tagging_info(tagging_info_buffer):
     '''
