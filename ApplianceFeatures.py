@@ -582,6 +582,7 @@ class Appliance(ElectricTimeStream):
         self.l1_on = self.l1_event[self.start_event:self.start_event+timedelta(seconds=featureLength)]-baseline
         baseline = self.l2_pre.sum()/len(self.l2_pre)
         self.l2_on = self.l2_event[self.start_event:self.start_event+timedelta(seconds=featureLength)]-baseline
+
     def getOff(self,featureLength):
         '''Sets Off feature as last "featureLength" seconds of event with baseline subtracted from post.
         '''
@@ -589,6 +590,7 @@ class Appliance(ElectricTimeStream):
         self.l1_off = self.l1_event[self.stop_event-timedelta(seconds=featureLength):self.stop_event]-baseline
         baseline = self.l2_post.sum()/len(self.l2_post)
         self.l2_off = self.l2_event[self.stop_event-timedelta(seconds=featureLength):self.stop_event]-baseline
+
     def getSS(self,featureLength):
         '''Sets SS feature as time between Start and Stop times without featureLength/2 on both ends.
         '''
