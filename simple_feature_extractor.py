@@ -2,6 +2,7 @@ import ApplianceFeatures as af
 import numpy as np
 from scipy import ndimage, signal
 from datetime import timedelta
+import pandas as pd
 
 """
 This just reads in the appliance training data and measures the jump in a given
@@ -40,44 +41,61 @@ def extract_event_value(stream):
         peak_indices = list(np.array(peak_locs)[vetted_peak_locs])
         peak_times = stream.index[peak_indices]
         peak_data = stream_gradient[peak_indices]
-        precise_event_start_timestamp = peak_times.min()
-        precise_event_end_timestamp = peak_times.max()
+        precise_event_start_timestamp = peak_times[np.where(peak_data==peak_data.max())[0][0]]
+        precise_event_end_timestamp = peak_times[np.where(peak_data==peak_data.min())[0][0]]
         buffer_time = timedelta(seconds=0.5)
         before_stream = stream[stream.index<(precise_event_start_timestamp-buffer_time)]
         during_stream = stream[(stream.index>(precise_event_start_timestamp+buffer_time)) & (stream.index<(precise_event_end_timestamp-buffer_time))]
         after_stream = stream[stream.index>(precise_event_end_timestamp+buffer_time)]
         baseline_std = ((before_stream.std())**2 + (after_stream.std())**2)**0.5
-        if not (abs(before_stream.median() - after_stream.median()) < 2*baseline_std):
-            # print "OMG, before_stream and after_stream indicate a baseline that changes during the event. Abort!!!"
-            return None, None
-        else:
+        if (abs(before_stream.median() - after_stream.median()) < 2*baseline_std):
             baseline_value = (before_stream.median() + after_stream.median())/2.0
             cropped_during_stream, event_value, event_std = mad_clipping(during_stream, 3)
             event_difference = event_value - baseline_value
             event_different_std = ((baseline_std)**2 + (event_std)**2)**0.5
-            return event_difference, event_different_std
+            jump_buffer_time = timedelta(seconds=3)
+            on_jump = stream[(stream.index>(precise_event_start_timestamp-jump_buffer_time)) & (stream.index<(precise_event_start_timestamp+jump_buffer_time))]-before_stream.median()
+            off_jump = stream[(stream.index>(precise_event_end_timestamp-jump_buffer_time)) & (stream.index<(precise_event_end_timestamp+jump_buffer_time))]-after_stream.median()
+            cropped_during_timeseries = ((pd.Series(cropped_during_stream.index) - pd.Series(cropped_during_stream.index)[0]).values).astype(float)/1e9
+            cropped_during_timeseries = cropped_during_timeseries - (cropped_during_timeseries[-1]-cropped_during_timeseries[0])/2.0
+            slope, mid_val = np.polyfit(cropped_during_timeseries, cropped_during_stream.values - baseline_value, 1)
+            
+            return mid_val, event_different_std, slope, on_jump, off_jump
+        else:
+            # print "OMG, before_stream and after_stream indicate a baseline that changes during the event. Abort!!!"
+            return None, None, None, None, None
     else:
         # print "OMG, there were not at least 2 detected jumps in the stream, so no event can be measured."
-        return None, None
+        return None, None, None, None, None
+
+
+for appliance_event_number in [11, 12, 13]:
+    app=af.Appliance(appliance_event_number)
+    stream = app.l1_event.real.sum(axis=1)
+    event_midval_difference, event_different_std, event_mid_slope, on_jump, off_jump = extract_event_value(stream)
+    print event_midval_difference, event_different_std, event_mid_slope
+
+
+
 
 
 
 # appliance_event_number = 0 # there are 441
 
-data_list = []
-for appliance_event_number in range(100, 115):
-    app=af.Appliance(appliance_event_number)
-
-    L1_Real_val, L1_Real_std = extract_event_value(app.l1_event.real.sum(axis=1))
-    L1_Imag_val, L1_Imag_std = extract_event_value(app.l1_event.imag.sum(axis=1))
-
-    L2_Real_val, L2_Real_std = extract_event_value(app.l2_event.real.sum(axis=1))
-    L2_Imag_val, L2_Imag_std = extract_event_value(app.l2_event.imag.sum(axis=1))
-
-    data_list.append([app.id, app.house, app.name, L1_Real_val, L1_Real_std, L1_Imag_val, L1_Imag_std, L2_Real_val, L2_Real_std, L2_Imag_val, L2_Imag_std])
-
-for line in data_list:
-    print line[0], "\t", line[1], line[2], "[(", line[3], "+/-", line[4], ") (", line[5], "+/-", line[6], ")]", "[(", line[7], "+/-", line[8], ") (", line[9], "+/-", line[10], ")]"
+# data_list = []
+# for appliance_event_number in range(100, 115):
+#     app=af.Appliance(appliance_event_number)
+# 
+#     L1_Real_val, L1_Real_std = extract_event_value(app.l1_event.real.sum(axis=1))
+#     L1_Imag_val, L1_Imag_std = extract_event_value(app.l1_event.imag.sum(axis=1))
+# 
+#     L2_Real_val, L2_Real_std = extract_event_value(app.l2_event.real.sum(axis=1))
+#     L2_Imag_val, L2_Imag_std = extract_event_value(app.l2_event.imag.sum(axis=1))
+# 
+#     data_list.append([app.id, app.house, app.name, L1_Real_val, L1_Real_std, L1_Imag_val, L1_Imag_std, L2_Real_val, L2_Real_std, L2_Imag_val, L2_Imag_std])
+# 
+# for line in data_list:
+#     print line[0], "\t", line[1], line[2], "[(", line[3], "+/-", line[4], ") (", line[5], "+/-", line[6], ")]", "[(", line[7], "+/-", line[8], ") (", line[9], "+/-", line[10], ")]"
 
 
 # print "L1 Real 0:", extract_event_value(app.l1_event.real["0"])
