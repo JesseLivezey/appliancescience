@@ -202,11 +202,11 @@ def find_appliance_jumps(stream):
     peak_indices = list(np.array(peak_locs)[vetted_peak_locs])
     peak_times = stream.index[peak_indices]
     peak_data = stream_gradient[peak_indices]
-    return [[peak_indices[np.where(peak_data==peak_data.max())[0][0]], peak_indices[np.where(peak_data==peak_data.max())[0][0]]], [peak_indices[np.where(peak_data==peak_data.min())[0][0]], peak_indices[np.where(peak_data==peak_data.min())[0][0]]]]
+    return peak_indices[np.where(peak_data==peak_data.max())[0][0]], peak_indices[np.where(peak_data==peak_data.min())[0][0]]
 
 
 
 app=ap.Appliance(1)
 appliance_on_jump, appliance_off_jump = find_appliance_jumps(app.l2_event.real.sum(axis=1))
-appliance_on_features = measure_jump_features(app.l2_event, appliance_on_jump[0], appliance_on_jump[1])
-appliance_off_features = measure_jump_features(app.l2_event, appliance_off_jump[0], appliance_off_jump[1])
+appliance_on_features = measure_jump_features(app.l2_event, appliance_on_jump, appliance_on_jump)
+appliance_off_features = measure_jump_features(app.l2_event, appliance_off_jump, appliance_off_jump)
