@@ -174,12 +174,39 @@ L1_combined_jumps = find_jumps(L1_Amp)
 
 def measure_jump_features(time_stream, start_index, end_index, search_width=1.0, jump_buffer=6):
     features = []
-    harmonics = ["0", "1", "2", "3", "4", "5"]
-    for h in harmonics:
-        features.append(measure_jump(time_stream.real[h].values, start_index, end_index, search_width=search_width, jump_buffer=jump_buffer))
-        features.append(measure_jump(time_stream.imag[h].values, start_index, end_index, search_width=search_width, jump_buffer=jump_buffer))
-        features.append(measure_jump(time_stream.amp[h].values, start_index, end_index, search_width=search_width, jump_buffer=jump_buffer))
-        features.append(measure_jump(time_stream.pf[h].values, start_index, end_index, search_width=search_width, jump_buffer=jump_buffer))
+#     harmonics = ["0", "1", "2", "3", "4", "5"]
+#     for h in harmonics:
+#         features.append(measure_jump(time_stream.real[h].values, start_index, end_index, search_width=search_width, jump_buffer=jump_buffer))
+#         features.append(measure_jump(time_stream.imag[h].values, start_index, end_index, search_width=search_width, jump_buffer=jump_buffer))
+#         features.append(measure_jump(time_stream.amp[h].values, start_index, end_index, search_width=search_width, jump_buffer=jump_buffer))
+#         features.append(measure_jump(time_stream.pf[h].values, start_index, end_index, search_width=search_width, jump_buffer=jump_buffer))
+    features.append(measure_jump(time_stream.real.sum(axis=1).values, start_index, end_index, search_width=search_width, jump_buffer=jump_buffer))
+    features.append(measure_jump(time_stream.imag.sum(axis=1).values, start_index, end_index, search_width=search_width, jump_buffer=jump_buffer))
     return features
 
 L1_features = measure_jump_features(a.l1, 388079, 388086)
+
+
+
+
+
+def find_appliance_jumps(stream):
+# L1 and L2 data is collected at a rate of 6.0064028254118895 times per second
+# HF spectra data is collected at a rate of 0.9375005859378663 times per second
+    median_stream = ndimage.filters.median_filter(stream, 6.0064028254118895) # smooth with width 1 second of data
+    smooth_stream = ndimage.filters.gaussian_filter1d(median_stream, 1.0) # smooth
+    stream_gradient = np.gradient(smooth_stream)
+    peak_locs = signal.find_peaks_cwt(abs(stream_gradient), np.array([1]), min_snr=1)
+    clipped_stream_gradient, stream_gradient_median, std_around_zero = mad_clipping(stream_gradient, 3)
+    vetted_peak_locs = list(np.where(abs(stream_gradient[peak_locs]) > 5*std_around_zero)[0])
+    peak_indices = list(np.array(peak_locs)[vetted_peak_locs])
+    peak_times = stream.index[peak_indices]
+    peak_data = stream_gradient[peak_indices]
+    return [[peak_indices[np.where(peak_data==peak_data.max())[0][0]], peak_indices[np.where(peak_data==peak_data.max())[0][0]]], [peak_indices[np.where(peak_data==peak_data.min())[0][0]], peak_indices[np.where(peak_data==peak_data.min())[0][0]]]]
+
+
+
+app=ap.Appliance(1)
+appliance_on_jump, appliance_off_jump = find_appliance_jumps(app.l2_event.real.sum(axis=1))
+appliance_on_features = measure_jump_features(app.l2_event, appliance_on_jump[0], appliance_on_jump[1])
+appliance_off_features = measure_jump_features(app.l2_event, appliance_off_jump[0], appliance_off_jump[1])
