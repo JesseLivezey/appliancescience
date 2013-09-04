@@ -30,7 +30,7 @@ def parse_tagging_info(tagging_info_buffer):
             tagging_info_dict[id]["OnOffSeq"].append( (on_time, off_time) )
     return tagging_info_dict
 
-def measure_jump(vals, loc, loc_end=0, search_width=1.0, jump_buffer=2):
+def measure_jump(vals, loc, loc_end, search_width=1.0, jump_buffer=2):
     """
     Find the difference when going from one state to another.
     search_width is in seconds.
@@ -114,7 +114,7 @@ def combine_jumps_together_smarter(jumps, time_ticks, smooth_vals):
     combined_jumps = []
     for entry in new_df.values:
         jump_interval = [entry[0], entry[1]]
-        jump_height, jump_std = measure_jump(smooth_vals, jump_interval[0], loc_end=jump_interval[-1]-jump_interval[0], search_width=1.5, jump_buffer=5)
+        jump_height, jump_std = measure_jump(smooth_vals, jump_interval[0], jump_interval[-1], search_width=1.5, jump_buffer=5)
         if abs(jump_height) > 3*jump_std:
             combined_jumps.append([(jump_interval[0], jump_interval[-1]), (jump_height, jump_std), (time_ticks[jump_interval[0]], time_ticks[jump_interval[-1]])])
     return combined_jumps
@@ -173,7 +173,7 @@ def combine_jumps_together(jumps, time_ticks, smooth_vals):
     
     combined_jumps = []
     for jump_interval in merged_jump_indices:
-        jump_height, jump_std = measure_jump(smooth_vals, jump_interval[0], loc_end=jump_interval[-1]-jump_interval[0], search_width=1.5, jump_buffer=5)
+        jump_height, jump_std = measure_jump(smooth_vals, jump_interval[0], jump_interval[-1], search_width=1.5, jump_buffer=5)
         if abs(jump_height) > 3*jump_std:
             combined_jumps.append([(jump_interval[0], jump_interval[-1]), (jump_height, jump_std), (time_ticks[jump_interval[0]], time_ticks[jump_interval[-1]])])
     
@@ -233,7 +233,7 @@ def event_detector2(time_ticks, vals):
     jumps = []
     for loc in peak_indices:
         if loc > 8 and loc < smooth_vals.size-8:
-            jump_height, jump_std = measure_jump(smooth_vals, loc, loc_end=0, search_width=1.0, jump_buffer=5)
+            jump_height, jump_std = measure_jump(smooth_vals, loc, loc, search_width=1.0, jump_buffer=5)
             jumps.append([[loc, loc], (jump_height, jump_std), (time_ticks[loc], time_ticks[loc])])
     try:
         if len(jumps) > 1:
