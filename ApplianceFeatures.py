@@ -566,6 +566,25 @@ class Appliance(ElectricTimeStream):
         spec_avg_off = (1.0*(self.dfhf_pre.sum(axis=0) 
             + self.dfhf_post.sum(axis=0)))/(len(self.dfhf_pre) + len(self.dfhf_post))
         spec_diff = spec_avg_on - spec_avg_off
+        
+        
+        # grab the spectra just from the beginning and end - 10 seconds as its booting up, 10 seconds as shutting down
+        start_time_start = (pd.to_datetime(self.start_event+timedelta(seconds=6)))
+        start_time_end = (pd.to_datetime(self.start_event+timedelta(seconds=20)))
+        end_time_start = (pd.to_datetime(self.stop_event-timedelta(seconds=20)))
+        end_time_end = (pd.to_datetime(self.stop_event-timedelta(seconds=6)))
+        start_df =  self.dfhf_event.loc[(self.dfhf_event.index > start_time_start) & (self.dfhf_event.index < start_time_end)]
+        end_df =  self.dfhf_event.loc[(self.dfhf_event.index > end_time_start) & (self.dfhf_event.index < end_time_end)]                
+        
+        # for the off points, only take the time preceeding the startup
+        spec_avg_start = 1.0*start_df.sum(axis=0)/len(start_df)
+        spec_avg_end = 1.0*end_df.sum(axis=0)/len(end_df)
+        spec_avg_pre = 1.0*self.dfhf_pre.sum(axis=0)/len(self.dfhf_pre)
+        spec_avg_post = 1.0*self.dfhf_post.sum(axis=0)/len(self.dfhf_post)
+        spec_diff_start = spec_avg_start - spec_avg_pre
+        spec_diff_end = spec_avg_end - spec_avg_post
+        
+        
         self.avg_spectrum = pd.DataFrame({
         "on":spec_avg_on,
         "off":spec_avg_off,
@@ -573,7 +592,11 @@ class Appliance(ElectricTimeStream):
         "on_smoothed":smooth(spec_avg_on,101,'hanning'),
         "off_smoothed":smooth(spec_avg_off,101,'hanning'),
         "diff_smoothed":smooth(spec_diff,101,'hanning'),
+        "diff_smoothed_start":smooth(spec_diff_start,101,'hanning'),
+        "diff_smoothed_end":smooth(spec_diff_end,101,'hanning')
         })
+        
+        
         
     def getOn(self,featureLength):
         '''Sets On feature as first "featureLength" seconds of event with baseline subtracted from pre.
@@ -617,7 +640,7 @@ class Appliance(ElectricTimeStream):
             return None
         spec = self.avg_spectrum.loc[:,'diff_smoothed']
         if plot == True:
-            self.avg_spectrum.loc[:,['on_smoothed','off_smoothed','diff_smoothed']].plot(legend=False)
+            self.avg_spectrum.loc[:,['on_smoothed','off_smoothed','diff_smoothed','diff_smoothed_start','diff_smoothed_end']].plot(legend=False)
         
         for value in spec.iloc[2:-2]:
             if (value > spec.iloc[count-1]) and \
@@ -746,6 +769,32 @@ class Appliance(ElectricTimeStream):
 
 
 
+
+def FindSpectralChanges(dfhf):
+    '''
+    Calculate the difference (approximate derivative) 
+    
+    tells you when the spectrum is changing over the course of seconds.
+    '''
+    smoothdfhf = dfhf.apply(smooth,args=(101,'hanning'),axis=0)
+    diffdf2n =(pd.DataFrame(smoothdfhf.iloc[2:].values-smoothdfhf.iloc[:-2].values,index=smoothdfhf.index[1:-1]))/2.0
+    diffdf6 =pd.DataFrame(smoothdfhf.iloc[6:].values-smoothdfhf.iloc[:-6].values,index=smoothdfhf.index[3:-3])
+    deltaspec2 = diffdf2.sum(axis=1)
+    deltaspec6 = diffdf6.sum(axis=1)
+    return diffdf2, deltaspec2, diffdf6, deltaspec6
+    
+    # In [75]: app=af.Appliance(364)
+    # 
+    # In [59]: diffed = diffdf2 - app.avg_spectrum['diff_smoothed'].values
+    # 
+    # In [70]: def square(arg): return arg*arg
+    # 
+    # In [63]: diffsq=diffed.apply(square,axis=1)
+    # 
+    # In [73]: diffsq.sum(axis=1).plot()
+    # Out[73]: <matplotlib.axes.AxesSubplot at 0x1f3d2cb0>
+    
+    
 def SaveSpectralTemplates():
     '''
     Example of how to loop through every training appliance & do stuff
@@ -757,6 +806,30 @@ def SaveSpectralTemplates():
         new_df.loc[ind] = ZeroTheNegatives(app.avg_spectrum['diff_smoothed'])
         # app_object_list.append(app)
     return new_df
+    ### spectral fit pseudocode
+    # zero the negative
+    # subtract off various strengths of templates (multiply the zeroed by a fraction)
+    # square the residuals 
+    # 
+    # In [63]: app=af.Appliance(88) #another vacuum
+    # In [64]: template=af.ZeroTheNegatives(app.avg_spectrum.diff_smoothed) 
+    # In [72]: app=af.Appliance(2) #portable vacuum with a way different spectrum
+    # In [73]: template_wrong=af.ZeroTheNegatives(app.avg_spectrum.diff_smoothed)
+    # In [71]: nulls=np.zeros(4096) #zeros
+    # 
+    # 
+    # In [74]: app=af.Appliance(89)
+    # In [75]: base = af.ZeroTheNegatives(app.avg_spectrum.diff_smoothed)
+    # 
+    # In [81]: ((nulls-base)**2).sum()
+    # Out[81]: 2652740.1325984728
+    # In [82]: ((template-base)**2).sum()
+    # Out[82]: 1176.7910430521431
+    # In [83]: ((template_wrong-base)**2).sum()
+    # Out[83]: 4140780.087982981
+    # 
+    # Easily see that we get the correct appliance.
+    
     
 def LoopThruAllAppliances():
     '''
@@ -764,7 +837,7 @@ def LoopThruAllAppliances():
     '''
     eventdf = pd.read_csv('data/eventtimes.csv')
     # app_object_list = []
-    for ind in eventdf.index:
+    for ind in eventdf.index[200:]:
         app = Appliance(ind)
         app.NaiiveFindPeaks(plot=True)
         # app_object_list.append(app)
