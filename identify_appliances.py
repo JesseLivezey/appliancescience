@@ -92,7 +92,9 @@ def combine_jumps_together_smarter(jumps, time_ticks, vals, thresh=30):
     return combined_jumps
     
 
-def plot_jumps(stream, datafilename, line_name, plot_flag=False):
+
+
+def find_jumps(stream):
     # L1 and L2 data is collected at a rate of 6.0064028254118895 times per second
     # HF spectra data is collected at a rate of 0.9375005859378663 times per second
     median_stream = ndimage.filters.median_filter(stream, 6.0064028254118895) # smooth with width 1 second of data
@@ -117,6 +119,11 @@ def plot_jumps(stream, datafilename, line_name, plot_flag=False):
     if jumps[-1][0][0] > len(stream)-5:
         jumps.pop(-1)
     combined_jumps = combine_jumps_together_smarter(jumps, stream.index, smooth_stream, thresh=15)
+    return combined_jumps
+
+
+def plot_jumps(stream, datafilename, line_name):
+    combined_jumps = find_jumps(stream)
     if plot_flag:
         stream_time_length = (stream.index[-1] - stream.index[0]).total_seconds()
         n_plot_rows = int(ceil(stream_time_length/1800.))
@@ -138,7 +145,6 @@ def plot_jumps(stream, datafilename, line_name, plot_flag=False):
         canvas = FigureCanvas(fig)
         canvas.print_figure("full_plots/" + datafilename.split(".")[0] + "_" + line_name + "_jumps.png", dpi=72, bbox_inches='tight')
         close("all")
-    return combined_jumps
 
 
 
@@ -162,7 +168,7 @@ a.ExtractComponents()
 L1_Amp = a.l1.amp.sum(axis=1)
 # L2_Amp = a.l2.amp.sum(axis=1)
 
-L1_combined_jumps = plot_jumps(L1_Amp, datafilename, "L1", plot_flag=False)
+L1_combined_jumps = find_jumps(L1_Amp)
 # L2_combined_jumps = plot_jumps(L2_Amp, datafilename, "L2", plot_flag=False)
 
 
@@ -170,7 +176,10 @@ def measure_jump_features(time_stream, start_index, end_index, search_width=1.0,
     features = []
     harmonics = ["0", "1", "2", "3", "4", "5"]
     for h in harmonics:
+        features.append(measure_jump(time_stream.real[h].values, start_index, end_index, search_width=search_width, jump_buffer=jump_buffer))
+        features.append(measure_jump(time_stream.imag[h].values, start_index, end_index, search_width=search_width, jump_buffer=jump_buffer))
         features.append(measure_jump(time_stream.amp[h].values, start_index, end_index, search_width=search_width, jump_buffer=jump_buffer))
+        features.append(measure_jump(time_stream.pf[h].values, start_index, end_index, search_width=search_width, jump_buffer=jump_buffer))
     return features
 
 L1_features = measure_jump_features(a.l1, 388079, 388086)
