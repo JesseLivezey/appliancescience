@@ -37,7 +37,7 @@ def measure_jump(vals, loc, loc_end=0, search_width=1.0, jump_buffer=2):
     """
     search_width_ticks = ceil(search_width/0.1664888858795166)
     previous_plateau = vals[loc - jump_buffer - search_width_ticks:loc - jump_buffer]
-    after_plateau = vals[loc + jump_buffer + loc_end:loc + jump_buffer + loc_end + search_width_ticks]
+    after_plateau = vals[loc_end + jump_buffer:loc_end + jump_buffer + search_width_ticks]
     previous_mean = previous_plateau.mean()
     previous_std = previous_plateau.std()
     after_mean = after_plateau.mean()
