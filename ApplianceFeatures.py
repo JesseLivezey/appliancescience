@@ -776,23 +776,65 @@ def FindSpectralChanges(dfhf):
     
     tells you when the spectrum is changing over the course of seconds.
     '''
-    smoothdfhf = dfhf.apply(smooth,args=(101,'hanning'),axis=0)
-    diffdf2n =(pd.DataFrame(smoothdfhf.iloc[2:].values-smoothdfhf.iloc[:-2].values,index=smoothdfhf.index[1:-1]))/2.0
+    #smooth over frequency
+    smoothdfhf = dfhf.apply(smooth,args=(101,'hanning'),axis=1) # i was smoothing over the wrong axis!!
+    #smooth over time as well??
+    smoothdfhf = smoothdfhf.apply(smooth,args=(11,'hanning'),axis=0) # i was smoothing over the wrong axis!!
+    diffdf2 =(pd.DataFrame(smoothdfhf.iloc[2:].values-smoothdfhf.iloc[:-2].values,index=smoothdfhf.index[1:-1]))/2.0
     diffdf6 =pd.DataFrame(smoothdfhf.iloc[6:].values-smoothdfhf.iloc[:-6].values,index=smoothdfhf.index[3:-3])
     deltaspec2 = diffdf2.sum(axis=1)
     deltaspec6 = diffdf6.sum(axis=1)
     return diffdf2, deltaspec2, diffdf6, deltaspec6
     
-    # In [75]: app=af.Appliance(364)
+    # # In [75]: app=af.Appliance(380)
+    # Template to compare to: load up appliance
+    # tempdiffdf2,tempdeltaspec2,tempdiffdf6,tempdeltaspec6=af.FindSpectralChanges(app.dfhf_event)
     # 
-    # In [59]: diffed = diffdf2 - app.avg_spectrum['diff_smoothed'].values
+    # where the sum over the spectrum is maximum is a good indication of the "turn on" point of the appliance
+    # where it is minimum is the "turn off" point.
+    # In [53]: tempdiffdf2.sum(axis=1).describe()
+    # Out[53]:
+    # count      64.000000
+    # mean       -2.124897
+    # std       572.671946
+    # min     -1288.835732
+    # 25%      -256.975932
+    # 50%       -26.551890
+    # 75%       132.613595
+    # max      1588.896931
+    # dtype: float64
     # 
+    # In [54]: tempdiffdf2.sum(axis=1).idxmin()
+    # Out[54]: Timestamp('2012-07-27 22:25:57.598971136', tz=None)
+    # 
+    # In [55]: tempdiffdf2.sum(axis=1).idxmax()
+    # Out[55]: Timestamp('2012-07-27 22:24:59.998970880', tz=None)
+    # 
+    # #grab the spectrum at this value. this replaces "app.avg_spectrum['diff_smoothed'].values"
+    # In [61]: template_on = tempdiffdf2.transpose()[tempdiffdf2.sum(axis=1).idxmax()]
+    # In [61]: template_off = tempdiffdf2.transpose()[tempdiffdf2.sum(axis=1).idxmin()]
+    # 
+    # 
+    # load up test data
+    # In [67]: ets=af.ElectricTimeStream('data/hdf5storage/H4_07-27.h5')
+    # Loaded data/hdf5storage/H4_07-27.h5
+    # 
+    # In [68]: ets.ExtractComponents()
+    # Extracting components...
+    # 
+    # In [74]: diffdf2,deltaspec2,diffdf6,deltaspec6=af.FindSpectralChanges(ets.dfhf[4000:8000])    # 
+    # In [70]: diffed_on = diffdf2 - template_on    # 
+    # In [70]: diffed_off = diffdf2 - template_off    # 
+    
     # In [70]: def square(arg): return arg*arg
     # 
-    # In [63]: diffsq=diffed.apply(square,axis=1)
-    # 
-    # In [73]: diffsq.sum(axis=1).plot()
+    # In [63]: diff_on_sq=diffed_on.apply(square,axis=1)
+    # In [63]: diff_off_sq=diffed_off.apply(square,axis=1)
+    # In [73]: diff_off_sq.sum(axis=1).plot()
+    # In [73]: diff_on_sq.sum(axis=1).plot()
     # Out[73]: <matplotlib.axes.AxesSubplot at 0x1f3d2cb0>
+    
+    
     
     
 def SaveSpectralTemplates():
