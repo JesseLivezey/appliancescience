@@ -506,8 +506,8 @@ class Appliance(ElectricTimeStream):
         self.start_event = pd.to_datetime(eventdf.loc[eventid]['start'],unit='s') 
         self.stop_event = pd.to_datetime(eventdf.loc[eventid]['stop'],unit='s') 
         # Add a 10 minute buffer to each end for truncation 
-        self.start_window = pd.to_datetime(pd.to_datetime(eventdf.loc[eventid]['start'],unit='s')-timedelta(minutes=10))
-        self.stop_window = pd.to_datetime(pd.to_datetime(eventdf.loc[eventid]['stop'],unit='s')+timedelta(minutes=10))
+        self.start_window = pd.to_datetime(pd.to_datetime(eventdf.loc[eventid]['start'],unit='s')-timedelta(minutes=2))
+        self.stop_window = pd.to_datetime(pd.to_datetime(eventdf.loc[eventid]['stop'],unit='s')+timedelta(minutes=2))
 
         ## Find the hdf5 file that contains the training event ##
         row = filedf.loc[(filedf.filestart < self.start_event) & (filedf.filestop > self.stop_event)]
