@@ -24,6 +24,7 @@ from datetime import timedelta
 import glob
 import gc
 from smooth1d import smooth
+from scipy import signal
 
 def _updateFileTimes():
     '''
@@ -768,8 +769,90 @@ class Appliance(ElectricTimeStream):
                     "L2_Pf0", "L2_Pf1", "L2_Pf2", "L2_Pf3", "L2_Pf4", "L2_Pf5")
 
 
+h4goodlist = [304,310,313,317,320,323,327,330,339,342,354,360,365,368,371,374,377,380,383]
+
+def MakeApplianceTemplates(ap_list):
+    '''
+    Given a list of "good" appliance IDs (that is, ones that have discernable
+    HF spectral signatures), generate a dataframe of templates for the HF 
+    derivative signature when the device is turning on, and when it is turning
+    off.
+    '''
+    for ap_id in ap_list:
+        ton, toff = _getApplianceTemplates(ap_id) # change to _lookup..
+        
+def _getApplianceTemplates(ap_id):
+    '''
+    Lookup and return the on/off HF template for a given appliance
+    '''
+    app=Appliance(ap_id)
+    tempdiffdf2,tempdeltaspec2=FindSpectralChanges(app.dfhf_event)
+    template_on = tempdiffdf2.transpose()[tempdeltaspec2.idxmax()]
+    template_off = tempdiffdf2.transpose()[tempdeltaspec2.idxmin()]
+    return template_on,template_off,app.house,app.name
+
+def GetCandidateHFList(ap_id,hdf5file,plot=True):
+    '''
+    Given an appliance id and hdf5file, find the locations in the timestream
+    where the appliance looks to have turned on and off based on the 
+    HF noise patterns. 
+    '''
+    template_on, template_off,house,name = _getApplianceTemplates(ap_id)
+    
+    ets=ElectricTimeStream(hdf5file)
+    ets.ExtractComponents()
+    diffdf2,deltaspec2=FindSpectralChanges(ets.dfhf[4000:8000])
+    diffed_on = diffdf2 - template_on
+    diffed_off = diffdf2 - template_off
+    def square(arg): return arg*arg
+    
+    diff_on_sq=diffed_on.apply(square,axis=1)
+    diff_off_sq=diffed_off.apply(square,axis=1)
+    
+    off_resid = diff_off_sq.sum(axis=1)
+    on_resid = diff_on_sq.sum(axis=1)
+    
+    med_on = on_resid.median()
+    med_off = off_resid.median()
+    
+    sig_on = 1.48*np.median(np.abs(on_resid.values-np.median(on_resid.values)))
+    sig_off = 1.48*np.median(np.abs(off_resid.values-np.median(off_resid.values)))
+    # on_resid_clip,on_resid_clip_med,on_resid_clip_sig=af.mad_clipping(on_resid,5)
+    # off_resid_clip,off_resid_clip_med,off_resid_clip_sig=af.mad_clipping(off_resid,5)
+    
+    thresh = 0.20
+    
+    
+    on_resid = on_resid/med_on
+    off_resid = off_resid/med_off
 
 
+    all_possible_ons = on_resid.loc[on_resid < thresh]
+    all_possible_offs = off_resid.loc[off_resid < thresh]
+    possible_ons = combine_nearby_times(all_possible_ons) 
+    possible_offs = combine_nearby_times(all_possible_offs)
+    
+    ondf = pd.DataFrame({},index=possible_ons.start)
+    offdf = pd.DataFrame({},index=possible_offs.stop)
+    
+    if plot == True:
+        on_resid.plot(color='blue')
+        off_resid.plot(color='orange')
+        # for start in possible_ons['start']:
+            # ax.vlines(pd.to_datetime(start),0,10000,color='green')
+        # for stop in possible_offs['stop']:
+            # ax.vlines(pd.to_datetime(stop),0,10000,color='red')
+        # all_possible_ons.plot(color='green')
+        # all_possible_offs.plot(color='red')
+        plt.axhline(thresh,color='red')
+        plt.ylim(0,2)
+        title=str(on_resid.index.min().date()) + '_' + str(on_resid.index.min().time())[0:5].replace(':','h') + 'm_' + house + '_' + name
+        plt.title(title)
+        plt.savefig('plots/Spectral_plots/{}.png'.format(title))
+        plt.clf()
+    
+    return possible_ons,possible_offs
+    
 def FindSpectralChanges(dfhf):
     '''
     Calculate the difference (approximate derivative) 
@@ -777,18 +860,19 @@ def FindSpectralChanges(dfhf):
     tells you when the spectrum is changing over the course of seconds.
     '''
     #smooth over frequency
-    smoothdfhf = dfhf.apply(smooth,args=(101,'hanning'),axis=1) # i was smoothing over the wrong axis!!
+    smoothdfhf = dfhf.apply(smooth,args=(101,'hanning'),axis=1) 
     #smooth over time as well??
-    smoothdfhf = smoothdfhf.apply(smooth,args=(11,'hanning'),axis=0) # i was smoothing over the wrong axis!!
+    smoothdfhf = smoothdfhf.apply(smooth,args=(11,'hanning'),axis=0) 
     diffdf2 =(pd.DataFrame(smoothdfhf.iloc[2:].values-smoothdfhf.iloc[:-2].values,index=smoothdfhf.index[1:-1]))/2.0
-    diffdf6 =pd.DataFrame(smoothdfhf.iloc[6:].values-smoothdfhf.iloc[:-6].values,index=smoothdfhf.index[3:-3])
+    # diffdf6 =pd.DataFrame(smoothdfhf.iloc[6:].values-smoothdfhf.iloc[:-6].values,index=smoothdfhf.index[3:-3])
     deltaspec2 = diffdf2.sum(axis=1)
-    deltaspec6 = diffdf6.sum(axis=1)
-    return diffdf2, deltaspec2, diffdf6, deltaspec6
+    # deltaspec6 = diffdf6.sum(axis=1)
+    
+    return diffdf2, deltaspec2
     
     # # In [75]: app=af.Appliance(380)
     # Template to compare to: load up appliance
-    # tempdiffdf2,tempdeltaspec2,tempdiffdf6,tempdeltaspec6=af.FindSpectralChanges(app.dfhf_event)
+    # tempdiffdf2,tempdeltaspec2=af.FindChanges(app.dfhf_event)
     # 
     # where the sum over the spectrum is maximum is a good indication of the "turn on" point of the appliance
     # where it is minimum is the "turn off" point.
@@ -822,7 +906,7 @@ def FindSpectralChanges(dfhf):
     # In [68]: ets.ExtractComponents()
     # Extracting components...
     # 
-    # In [74]: diffdf2,deltaspec2,diffdf6,deltaspec6=af.FindSpectralChanges(ets.dfhf[4000:8000])    # 
+    # In [74]: diffdf2,deltaspec2=af.FindSpectralChanges(ets.dfhf[4000:8000])    # 
     # In [70]: diffed_on = diffdf2 - template_on    # 
     # In [70]: diffed_off = diffdf2 - template_off    # 
     
@@ -948,6 +1032,63 @@ def save(input,outpath,clobber=False):
             print outpath
 
 
+# Median Absolute Deviation clipping for input array of numbers.
+def mad_clipping(input_data, sigma_clip_level):
+    medval = np.median(input_data)
+    sigma = 1.48 * np.median(abs(medval - input_data))
+    high_sigma_clip_limit = medval + sigma_clip_level * sigma
+    low_sigma_clip_limit = medval - sigma_clip_level * sigma
+    clipped_data = input_data[(input_data>(low_sigma_clip_limit)) & (input_data<(high_sigma_clip_limit))]
+    new_medval = np.median(clipped_data)
+    new_sigma = 1.48 * np.median(abs(medval - clipped_data))
+    return clipped_data, new_medval, new_sigma
+
+
+
+def combine_nearby_times(series, thresh=5):
+    # threshold of 5 seconds 
+    # thresh is the num of indices between the end of one window 
+    # and the beginning of the next to be considered the same
+    # main df
+    
+    # start_loc_list = []
+    # stop_loc_list = []
+    # values_list = []
+    # for jump in jumps:
+    #     start_loc_list.append(jump[0][0])
+    #     stop_loc_list.append(jump[0][1])
+    #     values_list.append(jump[1][0])
+    # adf=pd.DataFrame({"start":start_loc_list,"stop":stop_loc_list,"values":values_list})
+    # make blank output df
+    new_df=pd.DataFrame(columns=["start","stop","values","count","sum"])
+    # loop through and search
+    # columns=['start','stop','values']
+
+    thresh = timedelta(seconds=thresh)
+    
+    for index,val in series.iteritems():
+        found_neighbor = new_df.loc[(new_df.start < index) & (new_df.stop + thresh > index)]
+        if len(found_neighbor) == 1:
+            # print "found a neighbor"
+            intind = int(found_neighbor.index)
+            # print intind
+            
+            # wow this was klodgy and tough to get to work...
+            if index.to_datetime() < found_neighbor.iloc[0]['start']:
+                new_df.at[intind,'start'] = index.to_datetime()
+            if index.to_datetime() > found_neighbor.iloc[0]['stop']:
+                new_df.at[intind,'stop'] = index.to_datetime()
+            new_df.at[intind,'sum'] = val + new_df.loc[intind]['sum']
+            new_df.at[intind,'count'] += 1
+            new_df.at[intind,'values'] = new_df.loc[intind]['sum']/new_df.loc[intind]['count']
+
+        elif len(found_neighbor) == 0:
+            # print "adding new row"
+            new_df = new_df.append(pd.Series({"start":index.to_datetime(),"stop":index.to_datetime(),"values":val,"sum":val,"count":1}),ignore_index=True)
+        else:
+            print "We have a problem. In combine_nearby_times"
+            raise Exception
+    return new_df
 
 class untitledTests(unittest.TestCase):
     def setUp(self):
