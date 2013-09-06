@@ -93,7 +93,7 @@ def combine_jumps_together_smarter(jumps, time_ticks, vals, thresh=30):
     combined_jumps = []
     for entry in new_df.values:
         jump_interval = [entry[0], entry[1]]
-        jump_height, jump_std = measure_jump(vals, jump_interval[0], jump_interval[-1], search_width=1.0, jump_buffer=6)
+        jump_height, jump_std = measure_jump(vals, jump_interval[0], jump_interval[-1], search_width=2.5, jump_buffer=6)
         if (abs(jump_height) > 5*jump_std) and (abs(jump_height)>20):
             combined_jumps.append([(int(jump_interval[0]), int(jump_interval[-1])), (jump_height, jump_std), (time_ticks[jump_interval[0]], time_ticks[jump_interval[-1]])])
     return combined_jumps
@@ -112,20 +112,46 @@ def find_jumps(stream):
 # signal.find_peaks_cwt was taking too long on the 24-hour data streams
 # So, reverting to using simple median clipping to identify gradient vals above some threshold.
     clipped_stream_gradient, gradient_median, gradient_std = mad_clipping(stream_gradient, 3)
-    peak_locs = np.where((abs(stream_gradient - gradient_median) > 10*gradient_std))[0]
-    peak_times = stream.index[peak_locs]
+    min_peak_value = max(10*gradient_std, 1.5)
+    peak_locs = np.where((abs(stream_gradient - gradient_median) > min_peak_value))[0]
+    
+    
+    
+    thresh=12
+    start_loc_list = peak_locs
+    stop_loc_list = peak_locs
+    adf=pd.DataFrame({"start":start_loc_list,"stop":stop_loc_list})
+    # make blank output df
+    new_df=pd.DataFrame(columns=["start","stop","count"])
+    # loop through and search
+    columns=['start','stop']
+    for index,row in adf.iterrows():
+        found_neighbor = new_df.loc[(new_df.start < row['start']) & (new_df.stop + thresh > row['start'])]
+        if len(found_neighbor) == 1:
+            # print "found a neighbor"
+            intind = int(found_neighbor.index)
+            new_df.loc[intind]['stop'] = max(row['stop'],found_neighbor['stop'])
+            new_df.loc[intind]['count'] += 1
+        elif len(found_neighbor) == 0:
+            # print "adding new row"
+            new_df = new_df.append(row.append(pd.Series({"count":1})),ignore_index=True)
+            row.append
+        else:
+            print "We have a problem. (In combined_jumps_together_smarter)"
+    
+    peak_locs = new_df.values[:,:2]
     jumps = []
-    sample_time_length = timedelta(seconds=3.5)
-    buffer_time = timedelta(seconds=1.5)
+    sample_time_length = timedelta(seconds=2.5)
+    buffer_time = timedelta(seconds=1.0)
     for loc in peak_locs:
-        jump_difference, jump_std = measure_jump(smooth_stream, loc, loc, search_width=1.0, jump_buffer=6)
-        if (abs(jump_difference) > 5* jump_std) and (abs(jump_difference) > 20):
-            jumps.append([[loc, loc], (jump_difference, jump_std), (stream.index[loc], stream.index[loc])])
+        jump_difference, jump_std = measure_jump(smooth_stream, loc[0], loc[1], search_width=2.5, jump_buffer=6)
+        if (abs(jump_difference) > 5* jump_std) and (abs(jump_difference) > 10):
+            jumps.append([[loc[0], loc[1]], (jump_difference, jump_std), (stream.index[loc[0]], stream.index[loc[1]])])
     if jumps[0][0][0] < 5:
         jumps.pop(0)
     if jumps[-1][0][0] > len(stream)-5:
         jumps.pop(-1)
-    combined_jumps = combine_jumps_together_smarter(jumps, stream.index, smooth_stream, thresh=60)
+    combined_jumps = combine_jumps_together_smarter(jumps, stream.index, smooth_stream, thresh=12)
     return combined_jumps
 
 
@@ -346,41 +372,56 @@ def extract_training_features():
 # Read in Electric Time Stream
 
 file_list = os.listdir("data/hdf5storage/")
-for datafilename in file_list:
-    if datafilename[-3:] != ".h5":
-        continue
 
-    # datafilename = "H2_06-13.h5"
+# file_list = ["H1_04-13.h5"]
 
-    a = ap.ElectricTimeStream("data/hdf5storage/" + datafilename)
-    # Extract Components on the ap object
-    a.ExtractComponents()
+# for datafilename in file_list:
+#     if datafilename[-3:] != ".h5":
+#         continue
 
-    L1_Amp = a.l1.amp.sum(axis=1)
-    L2_Amp = a.l2.amp.sum(axis=1)
+datafilename = sys.argv[1]
 
-    L1_combined_jumps = find_jumps(L1_Amp)
-    L2_combined_jumps = find_jumps(L2_Amp)
+# datafilename = "H1_07-11_testing.h5"
 
-    combined_jumps_indices = []
-    for jump in L1_combined_jumps:
-        combined_jumps_indices.append(jump[0])
-    for jump in L2_combined_jumps:
-        combined_jumps_indices.append(jump[0])
-    combined_jumps_indices.sort()
-    testing_features_file = file("simple_features_" + datafilename[:-3] + ".csv", "w")
-    testing_features_file.write("timestamp,L1_real,L1_imag,L2_real,L2_imag\n")
-    for jump in combined_jumps_indices:
-        timestamp = a.l1.index[int((jump[1]+jump[0])/2.0)]
-        seconds = (timestamp - datetime(1970,1,1)).total_seconds()
-        L1_features = measure_jump_features(a.l1, jump[0], jump[1])
-        L2_features = measure_jump_features(a.l2, jump[0], jump[1])
-        testing_features_file.write(str(seconds) + "," + 
-            str(L1_features[0][0]) + "," + 
-            str(L1_features[1][0]) + "," + 
-            str(L2_features[0][0]) + "," + 
-            str(L2_features[1][0]) + "\n")
-    testing_features_file.close()
+a = ap.ElectricTimeStream("data/hdf5storage/" + datafilename)
+# Extract Components on the ap object
+a.ExtractComponents()
+
+L1_Amp = a.l1.amp.sum(axis=1)
+L2_Amp = a.l2.amp.sum(axis=1)
+
+L1_combined_jumps = find_jumps(L1_Amp)
+L2_combined_jumps = find_jumps(L2_Amp)
+
+combined_jumps_indices = []
+for jump in L1_combined_jumps:
+    combined_jumps_indices.append(jump[0])
+for jump in L2_combined_jumps:
+    combined_jumps_indices.append(jump[0])
+combined_jumps_indices.sort()
+testing_features_file = file("simple_features_" + datafilename[:-3] + ".csv", "w")
+testing_features_file.write("timestamp,L1_real,L1_imag,L2_real,L2_imag\n")
+for jump in combined_jumps_indices:
+    timestamp = a.l1.index[int((jump[1]+jump[0])/2.0)]
+    L1_features = measure_jump_features(a.l1, jump[0], jump[1])
+    L2_features = measure_jump_features(a.l2, jump[0], jump[1])
+    if (L1_features[0][0]**2 + L1_features[1][0]**2)**0.5 > (L2_features[0][0]**2 + L2_features[1][0]**2)**0.5:
+        if L1_features[0][0] + L1_features[1][0] > 0:
+            timestamp = a.l1.index[jump[0]]
+        else:
+            timestamp = a.l1.index[jump[1]]
+    else:
+        if L2_features[0][0] + L2_features[1][0] > 0:
+            timestamp = a.l1.index[jump[0]]
+        else:
+            timestamp = a.l1.index[jump[1]]
+    seconds = (timestamp - datetime(1970,1,1)).total_seconds()
+    testing_features_file.write(str(seconds) + "," + 
+        str(L1_features[0][0]) + "," + 
+        str(L1_features[1][0]) + "," + 
+        str(L2_features[0][0]) + "," + 
+        str(L2_features[1][0]) + "\n")
+testing_features_file.close()
 
 
 
