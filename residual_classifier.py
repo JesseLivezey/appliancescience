@@ -3,17 +3,21 @@ import numpy as np
 from numpy.lib.recfunctions import append_fields
 import pandas as pd
 from scipy import ndimage
-import sys
+import sys, os
 from matplotlib.pylab import *
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from datetime import datetime, timedelta
+import cPickle
 
 # Calculate residual between appliance data series and transition
 
 
-testing_data_filename = "H4_09-18_testing.h5"
+# testing_data_filename = "H4_09-18_testing.h5"
+# house = "H1"
 
+testing_data_filename = sys.argv[1]
 
+house = testing_data_filename.split("_")[0]
 
 
 
@@ -34,9 +38,11 @@ def mad_clipping(input_data, sigma_clip_level):
     new_sigma = 1.48 * np.median(abs(medval - clipped_data))
     return new_medval, new_sigma
 
-def find_residual(transition_stream, appliance_stream):
-    transition_vals = smooth_vals(transition_stream.values)
-    transition_vals = transition_stream.values
+def find_residual(transition_stream, appliance_stream, smooth_width):
+    if smooth_width > 0:
+        transition_vals = ndimage.filters.median_filter(transition_stream.values, smooth_width)
+    else:
+        transition_vals = transition_stream.values
     if transition_vals.min() > 0:
         min_transition_val, min_transition_val_std = mad_clipping(transition_vals[(transition_vals<transition_vals.min()*1.2)], 3)
     else:
@@ -47,8 +53,10 @@ def find_residual(transition_stream, appliance_stream):
         max_transition_val, max_transition_val_std = mad_clipping(transition_vals[(transition_vals>transition_vals.max()*1.2)], 3)
     transition_vals = transition_vals - min_transition_val
 
-    appliance_vals = smooth_vals(appliance_stream.values)
-    appliance_vals = appliance_stream.values
+    if smooth_width > 0:
+        appliance_vals = ndimage.filters.median_filter(appliance_stream.values, smooth_width)
+    else:
+        appliance_vals = appliance_stream.values
     if appliance_vals.min() > 0:
         min_appliance_val, min_appliance_val_std = mad_clipping(appliance_vals[(appliance_vals<appliance_vals.min()*1.2)], 3)
     else:
@@ -63,26 +71,42 @@ def find_residual(transition_stream, appliance_stream):
         appliance_stream_length = len(appliance_vals)
         length_diff = len(transition_vals) - appliance_stream_length
         residuals = []
+        max_differences = []
         for n in range(length_diff+1):
             residual = sum(abs(transition_vals[n:appliance_stream_length+n] - appliance_vals))/appliance_stream_length
+            max_difference = (abs(transition_vals[n:appliance_stream_length+n] - appliance_vals)).max()
             residuals.append(residual)
+            max_differences.append(max_difference)
         residuals = np.array(residuals)
-        if abs(max_appliance_val) - abs(min_appliance_val) < 0.01:
-            return None, None
+        max_differences = np.array(max_differences)
+        if abs(abs(max_appliance_val) - abs(min_appliance_val)) < 2.0:
+            return None, None, None
         else:
-            return residuals.min()/(max_appliance_val-min_appliance_val), np.where(residuals==residuals.min())[0][0]
+            return residuals.min()/(max_appliance_val-min_appliance_val), max_differences[np.where(residuals==residuals.min())[0][0]]/(max_appliance_val-min_appliance_val),  np.where(residuals==residuals.min())[0][0]
+    else:
+        return None, None, None
+
+def find_residual_robust(transition_stream, appliance_stream):
+    smooth_width_array = [0, 3, 6, 12]
+    residual_list = []
+    for smooth_width in smooth_width_array:
+        residual, max_diff, shift,  = find_residual(transition_stream, appliance_stream, smooth_width)
+        if residual:
+            if not isnan(residual):
+                residual_list.append([residual, max_diff, shift])
+    residual_list.sort()
+    if len(residual_list)>0:
+        return residual_list[0][0], residual_list[0][2]
     else:
         return None, None
 
 
+# file_list = os.listdir("data/hdf5storage/")
+# for testing_data_filename in file_list:
+#     if testing_data_filename[-3:] == ".h5" and testing_data_filename.split("_")[0]==house:
 
 
 
-
-
-
-
-house = testing_data_filename.split("_")[0]
 
 transition_filename = "all_transitions.csv"
 transition_data = np.loadtxt(transition_filename, skiprows=1, delimiter=",",
@@ -124,15 +148,58 @@ stream_end_time = max((data_stream.l1.index[-1] - datetime(1970, 1, 1)).total_se
                         (data_stream.l2.index[-1] - datetime(1970, 1, 1)).total_seconds())
 
 # Use this to hard-code a specific testing temporal region
-# stream_start_time = (datetime(2012, 8, 22, 18, 20, 0) - datetime(1970, 1, 1)).total_seconds()
-# stream_end_time = (datetime(2012, 8, 22, 18, 25, 0) - datetime(1970, 1, 1)).total_seconds()
+# stream_start_time = (datetime(2012, 7, 18, 7, 02, 30) - datetime(1970, 1, 1)).total_seconds()
+# stream_end_time = (datetime(2012, 7, 18, 7, 5, 00) - datetime(1970, 1, 1)).total_seconds()
 
+transition_filename = "all_transitions.csv"
+transition_data = np.loadtxt(transition_filename, skiprows=1, delimiter=",",
+    dtype=[ ("timestamp",np.float64),
+            ("L1_real",np.float32), 
+            ("L1_imag",np.float32), 
+            ("L2_real",np.float32),
+            ("L2_imag",np.float32) ] )
 transition_data = transition_data[(transition_data["timestamp"]>stream_start_time)&(transition_data["timestamp"]<stream_end_time)]
 
 stream_L1_real = data_stream.l1.real.sum(axis=1)
 stream_L1_imag = data_stream.l1.imag.sum(axis=1)
 stream_L2_real = data_stream.l2.real.sum(axis=1)
 stream_L2_imag = data_stream.l2.imag.sum(axis=1)
+
+
+# Read all the comparison appliances into memory, store in a dictionary
+comparison_appliance_dictionary = {}
+for appliance_num in appliance_training_nums:
+    comparison_appliance_dictionary[appliance_num] = {}
+    
+    comparison_appliance_training_data = appliance_training_data[appliance_training_data["appnum"]==appliance_num]
+    
+
+    comparison_appliance = af.Appliance(appliance_num)
+    comparison_appliance.ExtractComponents()
+    
+    for transition_type in ["on", "off"]:
+        if transition_type == "on":
+            comparison_appliance_time = datetime(1970, 1, 1) + timedelta(seconds=comparison_appliance_training_data["start_time"][0]+5)
+        if transition_type == "off":
+            comparison_appliance_time = datetime(1970, 1, 1) + timedelta(seconds=comparison_appliance_training_data["stop_time"][0]-5)                
+
+        comparison_appliance_L1_stream = comparison_appliance.l1[ 
+            (comparison_appliance.l1.index>comparison_appliance_time-timedelta(seconds=10)) & 
+            (comparison_appliance.l1.index<comparison_appliance_time+timedelta(seconds=10))]
+        comparison_appliance_L2_stream = comparison_appliance.l2[ 
+            (comparison_appliance.l2.index>comparison_appliance_time-timedelta(seconds=10)) & 
+            (comparison_appliance.l2.index<comparison_appliance_time+timedelta(seconds=10))]
+
+        comparison_appliance_L1_real = comparison_appliance_L1_stream.real.sum(axis=1)
+        comparison_appliance_L1_imag = comparison_appliance_L1_stream.imag.sum(axis=1)
+        comparison_appliance_L2_real = comparison_appliance_L2_stream.real.sum(axis=1)
+        comparison_appliance_L2_imag = comparison_appliance_L2_stream.imag.sum(axis=1)
+
+        comparison_appliance_dictionary[appliance_num][transition_type] = [comparison_appliance_L1_real, comparison_appliance_L1_imag, comparison_appliance_L2_real, comparison_appliance_L2_imag]
+
+
+
+
 
 classified_transitions = []
 for transition in transition_data:
@@ -148,69 +215,74 @@ for transition in transition_data:
             transition_type = appliance_featureset["transition"]
             comparison_appliance_nums = appliance_training_nums[appliance_training_data["id"]==appliance_featureset["id"]]
             transition_time = datetime(1970, 1, 1) + timedelta(seconds=transition["timestamp"])
-            transition_L1_real = stream_L1_real[(stream_L1_real.index > transition_time - timedelta(seconds=15)) & 
-                                                (stream_L1_real.index < transition_time + timedelta(seconds=15))]
-            transition_L1_imag = stream_L1_imag[(stream_L1_imag.index > transition_time - timedelta(seconds=15)) & 
-                                                (stream_L1_imag.index < transition_time + timedelta(seconds=15))]
-            transition_L2_real = stream_L2_real[(stream_L2_real.index > transition_time - timedelta(seconds=15)) & 
-                                                (stream_L2_real.index < transition_time + timedelta(seconds=15))]
-            transition_L2_imag = stream_L2_imag[(stream_L2_imag.index > transition_time - timedelta(seconds=15)) & 
-                                                (stream_L2_imag.index < transition_time + timedelta(seconds=15))]
-                                                
+            transition_L1_real = stream_L1_real[(stream_L1_real.index > transition_time - timedelta(seconds=25)) & 
+                                                (stream_L1_real.index < transition_time + timedelta(seconds=25))]
+            transition_L1_imag = stream_L1_imag[(stream_L1_imag.index > transition_time - timedelta(seconds=25)) & 
+                                                (stream_L1_imag.index < transition_time + timedelta(seconds=25))]
+            transition_L2_real = stream_L2_real[(stream_L2_real.index > transition_time - timedelta(seconds=25)) & 
+                                                (stream_L2_real.index < transition_time + timedelta(seconds=25))]
+            transition_L2_imag = stream_L2_imag[(stream_L2_imag.index > transition_time - timedelta(seconds=25)) & 
+                                                (stream_L2_imag.index < transition_time + timedelta(seconds=25))]
+                                        
             for appliance_num in comparison_appliance_nums:
                 comparison_appliance_training_data = appliance_training_data[appliance_training_data["appnum"]==appliance_num]
-                if transition_type == "on":
-                    comparison_appliance_time = datetime(1970, 1, 1) + timedelta(seconds=comparison_appliance_training_data["start_time"][0]+5)
-                if transition_type == "off":
-                    comparison_appliance_time = datetime(1970, 1, 1) + timedelta(seconds=comparison_appliance_training_data["stop_time"][0]-5)                
+#                 if transition_type == "on":
+#                     comparison_appliance_time = datetime(1970, 1, 1) + timedelta(seconds=comparison_appliance_training_data["start_time"][0]+5)
+#                 if transition_type == "off":
+#                     comparison_appliance_time = datetime(1970, 1, 1) + timedelta(seconds=comparison_appliance_training_data["stop_time"][0]-5)                
+#         
+#                 comparison_appliance = af.Appliance(appliance_num)
+#                 comparison_appliance.ExtractComponents()
+#                 comparison_appliance_L1_stream = comparison_appliance.l1[ 
+#                     (comparison_appliance.l1.index>comparison_appliance_time-timedelta(seconds=10)) & 
+#                     (comparison_appliance.l1.index<comparison_appliance_time+timedelta(seconds=10))]
+#                 comparison_appliance_L2_stream = comparison_appliance.l2[ 
+#                     (comparison_appliance.l2.index>comparison_appliance_time-timedelta(seconds=10)) & 
+#                     (comparison_appliance.l2.index<comparison_appliance_time+timedelta(seconds=10))]
+#         
+#                 comparison_appliance_L1_real = comparison_appliance_L1_stream.real.sum(axis=1)
+#                 comparison_appliance_L1_imag = comparison_appliance_L1_stream.imag.sum(axis=1)
+#                 comparison_appliance_L2_real = comparison_appliance_L2_stream.real.sum(axis=1)
+#                 comparison_appliance_L2_imag = comparison_appliance_L2_stream.imag.sum(axis=1)
                 
-                comparison_appliance = af.Appliance(appliance_num)
-                comparison_appliance.ExtractComponents()
-                comparison_appliance_L1_stream = comparison_appliance.l1[ 
-                    (comparison_appliance.l1.index>comparison_appliance_time-timedelta(seconds=10)) & 
-                    (comparison_appliance.l1.index<comparison_appliance_time+timedelta(seconds=10))]
-                comparison_appliance_L2_stream = comparison_appliance.l2[ 
-                    (comparison_appliance.l2.index>comparison_appliance_time-timedelta(seconds=10)) & 
-                    (comparison_appliance.l2.index<comparison_appliance_time+timedelta(seconds=10))]
-                
-                comparison_appliance_L1_real = comparison_appliance_L1_stream.real.sum(axis=1)
-                comparison_appliance_L1_imag = comparison_appliance_L1_stream.imag.sum(axis=1)
-                comparison_appliance_L2_real = comparison_appliance_L2_stream.real.sum(axis=1)
-                comparison_appliance_L2_imag = comparison_appliance_L2_stream.imag.sum(axis=1)
-                
+                comparison_appliance_L1_real = comparison_appliance_dictionary[appliance_num][transition_type][0]
+                comparison_appliance_L1_imag = comparison_appliance_dictionary[appliance_num][transition_type][1]
+                comparison_appliance_L2_real = comparison_appliance_dictionary[appliance_num][transition_type][2]
+                comparison_appliance_L2_imag = comparison_appliance_dictionary[appliance_num][transition_type][3]
+        
                 num_accepted_residuals = 0
                 sum_residual = 0
                 image_shifts_list = []
                 if abs(appliance_featureset["L1_real"]) > 10:
-                    L1_real_residual, L1_real_shift = find_residual(transition_L1_real, comparison_appliance_L1_real)
-                    if L1_real_residual:
+                    L1_real_residual, L1_real_shift = find_residual_robust(transition_L1_real, comparison_appliance_L1_real)
+                    if L1_real_residual and not isnan(L1_real_residual):
                         num_accepted_residuals += 1
                         sum_residual += L1_real_residual
                         image_shifts_list.append(L1_real_shift)
                 else:
                     L1_real_residual = None
-                
+        
                 if abs(appliance_featureset["L1_imag"]) > 10:
-                    L1_imag_residual, L1_imag_shift = find_residual(transition_L1_imag, comparison_appliance_L1_imag)
-                    if L1_imag_residual:
+                    L1_imag_residual, L1_imag_shift = find_residual_robust(transition_L1_imag, comparison_appliance_L1_imag)
+                    if L1_imag_residual and not isnan(L1_imag_residual):
                         num_accepted_residuals += 1
                         sum_residual += L1_imag_residual
                         image_shifts_list.append(L1_imag_shift)
                 else:
                     L1_imag_residual = None
-                
+        
                 if abs(appliance_featureset["L2_real"]) > 10:
-                    L2_real_residual, L2_real_shift = find_residual(transition_L2_real, comparison_appliance_L2_real)
-                    if L2_real_residual:
+                    L2_real_residual, L2_real_shift = find_residual_robust(transition_L2_real, comparison_appliance_L2_real)
+                    if L2_real_residual and not isnan(L2_real_residual):
                         num_accepted_residuals += 1
                         sum_residual += L2_real_residual
                         image_shifts_list.append(L2_real_shift)
                 else:
                     L2_real_residual = None
-                
+        
                 if abs(appliance_featureset["L2_imag"]) > 10:
-                    L2_imag_residual, L2_imag_shift = find_residual(transition_L2_imag, comparison_appliance_L2_imag)
-                    if L2_imag_residual:
+                    L2_imag_residual, L2_imag_shift = find_residual_robust(transition_L2_imag, comparison_appliance_L2_imag)
+                    if L2_imag_residual and not isnan(L2_imag_residual):
                         num_accepted_residuals += 1
                         sum_residual += L2_imag_residual
                         image_shifts_list.append(L2_imag_shift)
@@ -219,7 +291,7 @@ for transition in transition_data:
                 if num_accepted_residuals > 0:
                     average_residual = sum_residual/num_accepted_residuals                
                     comparison_results.append([average_residual, comparison_appliance_training_data["id"], comparison_appliance_training_data["name"], transition_type, image_shifts_list])
-
+                                        
     # If the comparison_results list contains multiple entries for the same appliance, take the best
     comparison_results.sort()
     accepted_candidate_ids = []
@@ -234,12 +306,12 @@ for transition in transition_data:
         new_transition = [transition["timestamp"], accepted_candidates]
         classified_transitions.append(new_transition)
 
-    
-            
 
-                
-            
+    
+
         
+    
+
 L1_Amp = data_stream.l1.amp.sum(axis=1)
 L2_Amp = data_stream.l2.amp.sum(axis=1)
 
@@ -262,13 +334,13 @@ for n in range(n_plot_rows):
     L2_time_end = L2_Amp.index[0] + timedelta(seconds=1800*(n+1))
     L2_amp_trimmed = L2_Amp[(L2_Amp.index>L2_time_start)&(L2_Amp.index<L2_time_end)]
     axes[n].plot(L2_amp_trimmed.index, L2_amp_trimmed.values, c="orange", lw=2)
-    
-    
-    
-    
+
+
+
+
     plot_start_time = min(L2_time_start, L1_time_start)
     plot_end_time = max(L2_time_end, L1_time_end)
-    
+
     plot_start_time_seconds = (plot_start_time - datetime(1970,1,1)).total_seconds()
     plot_end_time_seconds = (plot_end_time - datetime(1970,1,1)).total_seconds()
 
@@ -283,7 +355,7 @@ for n in range(n_plot_rows):
                 transition_line_color = "green"
             else:
                 transition_line_color = "red"
-        
+
             axes[n].plot([transition_timestamp, transition_timestamp], [0, plot_height], color=transition_line_color, lw=2)
             if transition_line_color == "green":
                 axes[n].text(transition_timestamp + timedelta(seconds=2), plot_height-100, desc_text, va="top", ha="left", color="k", rotation=90)
@@ -291,9 +363,9 @@ for n in range(n_plot_rows):
             else:
                 axes[n].text(transition_timestamp - timedelta(seconds=2), plot_height-100, desc_text, va="top", ha="right", color="k", rotation=90)
                 axes[n].scatter([transition_timestamp], [plot_height-50], marker="v", color="red", s=80)
-                        
-            
+                
     
+
     axes[n].set_xlim(plot_start_time, plot_end_time)
     axes[n].set_ylim(0,plot_height)
     axes[n].set_ylabel("Line Amplitudes")
@@ -302,3 +374,15 @@ for n in range(n_plot_rows):
 canvas = FigureCanvas(fig)
 canvas.print_figure("classified_plots/" + testing_data_filename.split(".")[0] + ".png", dpi=72, bbox_inches='tight')
 close("all")
+
+
+
+with open("classified_plots/" + testing_data_filename.split(".")[0] + "_classified.pkl",'w+b') as f:
+    cPickle.dump(classified_transitions, f)
+
+
+
+
+
+# with open("classified_plots/" + testing_data_filename.split(".")[0] + "_classified.pkl",'rb') as fp:
+#     ct=cPickle.load(fp)
